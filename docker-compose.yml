@@ -1,0 +1,164 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: embodied-news-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-embodied_news}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-embodied_news_password}
+      POSTGRES_DB: ${POSTGRES_DB:-embodied_news}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - embodied-news-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-embodied_news}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: embodied-news-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - embodied-news-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: embodied-news-api
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-8000}:8000"
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-embodied_news}:${POSTGRES_PASSWORD:-embodied_news_password}@postgres:5432/${POSTGRES_DB:-embodied_news}
+      - REDIS_URL=redis://redis:6379/0
+      - WECHAT_ADAPTER_URL=http://wechat-adapter:8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - embodied-news-network
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+  worker:
+    build:
+      context: ./apps/worker
+      dockerfile: Dockerfile
+    container_name: embodied-news-worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-embodied_news}:${POSTGRES_PASSWORD:-embodied_news_password}@postgres:5432/${POSTGRES_DB:-embodied_news}
+      - REDIS_URL=redis://redis:6379/0
+      - WECHAT_ADAPTER_URL=http://wechat-adapter:8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./apps/worker:/app
+    networks:
+      - embodied-news-network
+    command: celery -A app.worker worker --loglevel=info --concurrency=4
+
+  beat:
+    build:
+      context: ./apps/worker
+      dockerfile: Dockerfile
+    container_name: embodied-news-beat
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-embodied_news}:${POSTGRES_PASSWORD:-embodied_news_password}@postgres:5432/${POSTGRES_DB:-embodied_news}
+      - REDIS_URL=redis://redis:6379/0
+      - WECHAT_ADAPTER_URL=http://wechat-adapter:8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./apps/worker:/app
+    networks:
+      - embodied-news-network
+    command: celery -A app.worker beat --loglevel=info
+
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    container_name: embodied-news-web
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://api:8000
+    depends_on:
+      - api
+    volumes:
+      - ./apps/web:/app
+      - /app/node_modules
+      - /app/.next
+    networks:
+      - embodied-news-network
+
+  wechat-adapter:
+    image: ghcr.io/your-org/wechat-download-api:latest
+    container_name: embodied-news-wechat-adapter
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - wechat_data:/data
+    networks:
+      - embodied-news-network
+    profiles:
+      - wechat
+
+  nginx:
+    image: nginx:alpine
+    container_name: embodied-news-nginx
+    restart: unless-stopped
+    ports:
+      - "${NGINX_PORT:-80}:80"
+    volumes:
+      - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - web
+      - api
+    networks:
+      - embodied-news-network
+    profiles:
+      - nginx
+
+networks:
+  embodied-news-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  wechat_data:
