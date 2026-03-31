@@ -26,20 +26,26 @@ export default function DigestsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["digests"] });
     },
+    onError: (error: Error) => {
+      alert(`生成失败: ${error.message}`);
+    },
   });
 
   const sendTestMutation = useMutation({
     mutationFn: (id: string) =>
       api.post(`/api/digests/${id}/send-test`, { email: "test@example.com" }),
     onSuccess: () => {
-      alert("Test email sent!");
+      alert("测试邮件已发送！");
+    },
+    onError: (error: Error) => {
+      alert(`发送失败: ${error.message}`);
     },
   });
 
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold">Daily Digests</h1>
+        <h1 className="text-2xl font-bold">每日摘要</h1>
         <button
           onClick={() => generateMutation.mutate()}
           disabled={generateMutation.isPending}
@@ -49,7 +55,7 @@ export default function DigestsPage() {
             size={16}
             className={generateMutation.isPending ? "animate-spin" : ""}
           />
-          Generate Today
+          生成今日摘要
         </button>
       </div>
 
@@ -57,11 +63,11 @@ export default function DigestsPage() {
         <div className="lg:col-span-1">
           <div className="bg-white rounded-lg border shadow-sm">
             <div className="p-4 border-b">
-              <h2 className="font-semibold">History</h2>
+              <h2 className="font-semibold">历史记录</h2>
             </div>
             <div className="divide-y max-h-[600px] overflow-y-auto">
               {isLoading && (
-                <div className="p-4 text-center text-gray-400">Loading...</div>
+                <div className="p-4 text-center text-gray-400">加载中...</div>
               )}
               {digests?.map((d: any) => (
                 <button
@@ -85,17 +91,17 @@ export default function DigestsPage() {
                           : "bg-gray-100 text-gray-500"
                       }`}
                     >
-                      {d.status}
+                      {d.status === "sent" ? "已发送" : d.status === "draft" ? "草稿" : d.status}
                     </span>
                   </div>
                   <div className="text-xs text-gray-400 mt-1">
-                    {d.item_count} items
+                    {d.item_count} 条
                   </div>
                 </button>
               ))}
               {digests?.length === 0 && !isLoading && (
                 <div className="p-8 text-center text-gray-400 text-sm">
-                  No digests generated yet
+                  尚未生成任何摘要
                 </div>
               )}
             </div>
@@ -115,25 +121,25 @@ export default function DigestsPage() {
                     className="flex items-center gap-1 px-3 py-1.5 border rounded-md text-sm hover:bg-gray-50"
                   >
                     <Send size={14} />
-                    Test Send
+                    测试发送
                   </button>
                   <button className="flex items-center gap-1 px-3 py-1.5 border rounded-md text-sm hover:bg-gray-50">
                     <Download size={14} />
-                    Export
+                    导出
                   </button>
                 </div>
               </div>
               <div className="p-6">
                 <div className="prose prose-sm max-w-none">
                   <pre className="whitespace-pre-wrap text-sm bg-gray-50 p-4 rounded-lg">
-                    {selectedDigest.content_markdown || "No content"}
+                    {selectedDigest.content_markdown || "暂无内容"}
                   </pre>
                 </div>
               </div>
             </div>
           ) : (
             <div className="bg-white rounded-lg border shadow-sm flex items-center justify-center h-96 text-gray-400">
-              Select a digest to view
+              请选择一个摘要查看
             </div>
           )}
         </div>

@@ -1,14 +1,14 @@
+import base64
+import hashlib
 from cryptography.fernet import Fernet
 from app.core.config import get_settings
 
 
 def get_fernet() -> Fernet:
     settings = get_settings()
-    key = settings.ENCRYPTION_KEY.encode()
-    if len(key) < 32:
-        key = key.ljust(32, b"0")[:32]
-    import base64
-    b64_key = base64.urlsafe_b64encode(key)
+    key_bytes = settings.ENCRYPTION_KEY.encode()
+    key_hash = hashlib.sha256(key_bytes).digest()
+    b64_key = base64.urlsafe_b64encode(key_hash)
     return Fernet(b64_key)
 
 

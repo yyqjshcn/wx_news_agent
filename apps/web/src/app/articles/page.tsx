@@ -27,17 +27,17 @@ export default function ArticlesPage() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-6">Articles</h1>
+      <h1 className="text-2xl font-bold mb-6">文章列表</h1>
 
       <div className="bg-white rounded-lg border p-4 mb-6 shadow-sm">
         <div className="flex items-center gap-2 mb-3">
           <Filter size={16} className="text-gray-400" />
-          <span className="text-sm font-medium">Filters</span>
+          <span className="text-sm font-medium">筛选条件</span>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <input
             type="text"
-            placeholder="Account name"
+            placeholder="公众号名称"
             value={filters.account_name}
             onChange={(e) => setFilters({ ...filters, account_name: e.target.value })}
             className="px-3 py-2 border rounded-md text-sm"
@@ -47,23 +47,23 @@ export default function ArticlesPage() {
             onChange={(e) => setFilters({ ...filters, status: e.target.value })}
             className="px-3 py-2 border rounded-md text-sm"
           >
-            <option value="">All Status</option>
-            <option value="new">New</option>
-            <option value="classified">Classified</option>
-            <option value="skipped">Skipped</option>
+            <option value="">全部状态</option>
+            <option value="new">新文章</option>
+            <option value="classified">已分类</option>
+            <option value="skipped">已跳过</option>
           </select>
           <select
             value={filters.is_relevant}
             onChange={(e) => setFilters({ ...filters, is_relevant: e.target.value })}
             className="px-3 py-2 border rounded-md text-sm"
           >
-            <option value="">All Relevance</option>
-            <option value="true">Relevant</option>
-            <option value="false">Not Relevant</option>
+            <option value="">全部相关性</option>
+            <option value="true">相关</option>
+            <option value="false">不相关</option>
           </select>
           <input
             type="text"
-            placeholder="Event type"
+            placeholder="事件类型"
             value={filters.event_type}
             onChange={(e) => setFilters({ ...filters, event_type: e.target.value })}
             className="px-3 py-2 border rounded-md text-sm"
@@ -75,18 +75,18 @@ export default function ArticlesPage() {
         <table className="w-full text-sm">
           <thead className="bg-gray-50 border-b">
             <tr>
-              <th className="text-left px-4 py-3 font-medium text-gray-500">Title</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-500">Source</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-500">Relevant</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-500">Event</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-500">Date</th>
+              <th className="text-left px-4 py-3 font-medium text-gray-500">标题</th>
+              <th className="text-left px-4 py-3 font-medium text-gray-500">来源</th>
+              <th className="text-left px-4 py-3 font-medium text-gray-500">相关性</th>
+              <th className="text-left px-4 py-3 font-medium text-gray-500">事件</th>
+              <th className="text-left px-4 py-3 font-medium text-gray-500">日期</th>
             </tr>
           </thead>
           <tbody className="divide-y">
             {isLoading && (
               <tr>
                 <td colSpan={5} className="px-4 py-8 text-center text-gray-400">
-                  Loading...
+                  加载中...
                 </td>
               </tr>
             )}
@@ -107,17 +107,17 @@ export default function ArticlesPage() {
                 <td className="px-4 py-3">
                   {a.is_relevant === true && (
                     <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded-full text-xs">
-                      Yes
+                      是
                     </span>
                   )}
                   {a.is_relevant === false && (
                     <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-xs">
-                      No
+                      否
                     </span>
                   )}
                   {a.is_relevant === null && (
                     <span className="px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full text-xs">
-                      Pending
+                      待处理
                     </span>
                   )}
                 </td>
@@ -133,7 +133,7 @@ export default function ArticlesPage() {
         </table>
         {articles?.length === 0 && !isLoading && (
           <div className="text-center py-12 text-gray-400">
-            No articles found. Configure sources and run a workflow to start collecting.
+            未找到文章。配置来源并运行工作流以开始采集。
           </div>
         )}
       </div>

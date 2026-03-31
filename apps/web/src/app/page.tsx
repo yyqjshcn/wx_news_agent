@@ -15,33 +15,33 @@ import {
 export default function DashboardPage() {
   const { data: stats } = useQuery({
     queryKey: ["dashboard-stats"],
-    queryFn: () => api.get("/dashboard/stats"),
+    queryFn: () => api.get("/api/dashboard/stats"),
   });
 
   const cards = [
     {
-      label: "Today's Articles",
+      label: "今日文章",
       value: stats?.today_articles ?? 0,
       icon: FileText,
       color: "text-blue-600",
       bg: "bg-blue-50",
     },
     {
-      label: "Today's Events",
+      label: "今日事件",
       value: stats?.today_events ?? 0,
       icon: Zap,
       color: "text-amber-600",
       bg: "bg-amber-50",
     },
     {
-      label: "Total Articles",
+      label: "文章总数",
       value: stats?.total_articles ?? 0,
       icon: BarChart3,
       color: "text-indigo-600",
       bg: "bg-indigo-50",
     },
     {
-      label: "Total Digests",
+      label: "摘要总数",
       value: stats?.total_digests ?? 0,
       icon: BookOpen,
       color: "text-emerald-600",
@@ -51,7 +51,7 @@ export default function DashboardPage() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-6">Dashboard</h1>
+      <h1 className="text-2xl font-bold mb-6">仪表盘</h1>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         {cards.map((card) => {
@@ -76,22 +76,22 @@ export default function DashboardPage() {
       </div>
 
       <div className="bg-white rounded-lg border p-6 shadow-sm">
-        <h2 className="text-lg font-semibold mb-4">System Status</h2>
+        <h2 className="text-lg font-semibold mb-4">系统状态</h2>
         <div className="space-y-3">
           <StatusItem
-            label="WeChat Login"
+            label="微信登录"
             status="unknown"
-            message="Not yet configured"
+            message="尚未配置"
           />
           <StatusItem
-            label="Default Model"
+            label="默认模型"
             status="info"
-            message="Configure in Model Config page"
+            message="请在模型配置页面设置"
           />
           <StatusItem
-            label="Scheduler"
+            label="定时任务"
             status="info"
-            message="Celery Beat running"
+            message="Celery Beat 运行中"
           />
         </div>
       </div>

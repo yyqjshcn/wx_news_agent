@@ -6,8 +6,8 @@ import { Providers } from "./providers";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Embodied News Agent",
-  description: "Local WeChat intelligence briefing system",
+  title: "具身新闻智能体",
+  description: "本地微信智能简报系统",
 };
 
 export default function RootLayout({
@@ -16,7 +16,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
+    <html lang="zh-CN">
       <body className={inter.className}>
         <Providers>{children}</Providers>
       </body>

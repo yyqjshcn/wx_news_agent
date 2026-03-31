@@ -19,16 +19,16 @@ import {
 import { useState } from "react";
 
 const navItems = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/wechat", label: "WeChat Login", icon: MessageSquare },
-  { href: "/accounts", label: "Accounts", icon: Users },
-  { href: "/keywords", label: "Keywords", icon: KeyRound },
-  { href: "/providers", label: "Model Config", icon: Settings },
-  { href: "/workflows", label: "Workflows", icon: Workflow },
-  { href: "/articles", label: "Articles", icon: FileText },
-  { href: "/events", label: "Events", icon: Zap },
-  { href: "/digests", label: "Digests", icon: BookOpen },
-  { href: "/logs", label: "Logs", icon: ScrollText },
+  { href: "/", label: "仪表盘", icon: LayoutDashboard },
+  { href: "/wechat", label: "微信登录", icon: MessageSquare },
+  { href: "/accounts", label: "公众号管理", icon: Users },
+  { href: "/keywords", label: "关键词管理", icon: KeyRound },
+  { href: "/providers", label: "模型配置", icon: Settings },
+  { href: "/workflows", label: "工作流", icon: Workflow },
+  { href: "/articles", label: "文章列表", icon: FileText },
+  { href: "/events", label: "事件列表", icon: Zap },
+  { href: "/digests", label: "每日摘要", icon: BookOpen },
+  { href: "/logs", label: "任务日志", icon: ScrollText },
 ];
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
@@ -50,8 +50,8 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         }`}
       >
         <div className="p-6 border-b">
-          <h1 className="text-lg font-bold">Embodied News</h1>
-          <p className="text-xs text-gray-500">Intelligence Agent</p>
+          <h1 className="text-lg font-bold">具身新闻</h1>
+          <p className="text-xs text-gray-500">智能体</p>
         </div>
         <nav className="p-4 space-y-1">
           {navItems.map((item) => {

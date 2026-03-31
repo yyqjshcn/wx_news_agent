@@ -18,13 +18,22 @@ export default function EventsPage() {
     delivery: "bg-emerald-100 text-emerald-700",
   };
 
+  const eventTypeLabels: Record<string, string> = {
+    funding: "融资",
+    product_launch: "产品发布",
+    partnership: "合作",
+    conference: "会议",
+    research: "研究",
+    delivery: "交付",
+  };
+
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-6">Events</h1>
+      <h1 className="text-2xl font-bold mb-6">事件列表</h1>
 
       <div className="space-y-4">
         {isLoading && (
-          <div className="text-center py-12 text-gray-400">Loading...</div>
+          <div className="text-center py-12 text-gray-400">加载中...</div>
         )}
         {events?.map((e: any) => (
           <div
@@ -39,18 +48,18 @@ export default function EventsPage() {
                       eventTypeColors[e.event_type] || "bg-gray-100 text-gray-700"
                     }`}
                   >
-                    {e.event_type || "Unclassified"}
+                    {eventTypeLabels[e.event_type] || e.event_type || "未分类"}
                   </span>
                   {e.company_name && (
                     <span className="text-sm font-medium">{e.company_name}</span>
                   )}
                 </div>
                 <p className="text-sm text-gray-700 mb-2">
-                  {e.one_line_summary || "No summary"}
+                  {e.one_line_summary || "暂无摘要"}
                 </p>
                 <div className="flex items-center gap-4 text-xs text-gray-400">
                   <span>
-                    Importance: {e.importance}/5
+                    重要性: {e.importance}/5
                   </span>
                   {e.event_date && (
                     <span>
@@ -58,7 +67,7 @@ export default function EventsPage() {
                     </span>
                   )}
                   <span>
-                    Included in digest: {e.included_in_digest ? "Yes" : "No"}
+                    已包含在摘要中: {e.included_in_digest ? "是" : "否"}
                   </span>
                 </div>
               </div>
@@ -67,7 +76,7 @@ export default function EventsPage() {
         ))}
         {events?.length === 0 && !isLoading && (
           <div className="text-center py-12 text-gray-400">
-            No events yet. Articles will be classified into events automatically.
+            暂无事件。文章将自动分类为事件。
           </div>
         )}
       </div>

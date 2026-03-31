@@ -31,6 +31,9 @@ export default function AccountsPage() {
       setShowForm(false);
       resetForm();
     },
+    onError: (error: Error) => {
+      alert(`创建失败: ${error.message}`);
+    },
   });
 
   const updateMutation = useMutation({
@@ -41,12 +44,18 @@ export default function AccountsPage() {
       setEditingId(null);
       resetForm();
     },
+    onError: (error: Error) => {
+      alert(`更新失败: ${error.message}`);
+    },
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.delete(`/api/source-accounts/${id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["accounts"] });
+    },
+    onError: (error: Error) => {
+      alert(`删除失败: ${error.message}`);
     },
   });
 
@@ -85,7 +94,7 @@ export default function AccountsPage() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold">Source Accounts</h1>
+        <h1 className="text-2xl font-bold">公众号管理</h1>
         <button
           onClick={() => {
             resetForm();
@@ -95,7 +104,7 @@ export default function AccountsPage() {
           className="flex items-center gap-2 px-4 py-2 bg-gray-900 text-white rounded-md text-sm hover:bg-gray-800"
         >
           <Plus size={16} />
-          {showForm ? "Cancel" : "Add Account"}
+          {showForm ? "取消" : "添加公众号"}
         </button>
       </div>
 
@@ -107,7 +116,7 @@ export default function AccountsPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
             <div>
               <label className="block text-sm font-medium mb-1">
-                Account Name *
+                公众号名称 *
               </label>
               <input
                 type="text"
@@ -117,11 +126,11 @@ export default function AccountsPage() {
                   setForm({ ...form, account_name: e.target.value })
                 }
                 className="w-full px-3 py-2 border rounded-md text-sm"
-                placeholder="e.g. 机器之心"
+                placeholder="例如: 机器之心"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">Alias</label>
+              <label className="block text-sm font-medium mb-1">别名</label>
               <input
                 type="text"
                 value={form.account_alias}
@@ -132,7 +141,7 @@ export default function AccountsPage() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">Category</label>
+              <label className="block text-sm font-medium mb-1">分类</label>
               <input
                 type="text"
                 value={form.category}
@@ -140,11 +149,11 @@ export default function AccountsPage() {
                   setForm({ ...form, category: e.target.value })
                 }
                 className="w-full px-3 py-2 border rounded-md text-sm"
-                placeholder="e.g. AI Research, Robotics"
+                placeholder="例如: AI研究, 机器人"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">Priority</label>
+              <label className="block text-sm font-medium mb-1">优先级</label>
               <input
                 type="number"
                 min={1}
@@ -157,7 +166,7 @@ export default function AccountsPage() {
               />
             </div>
             <div className="md:col-span-2">
-              <label className="block text-sm font-medium mb-1">Notes</label>
+              <label className="block text-sm font-medium mb-1">备注</label>
               <textarea
                 value={form.notes}
                 onChange={(e) => setForm({ ...form, notes: e.target.value })}
@@ -172,14 +181,14 @@ export default function AccountsPage() {
               checked={form.enabled}
               onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
             />
-            Enabled
+            启用
           </label>
           <button
             type="submit"
             disabled={createMutation.isPending || updateMutation.isPending}
             className="px-4 py-2 bg-gray-900 text-white rounded-md text-sm hover:bg-gray-800 disabled:opacity-50"
           >
-            {editingId ? "Update" : "Create"}
+            {editingId ? "更新" : "创建"}
           </button>
         </form>
       )}
@@ -188,12 +197,12 @@ export default function AccountsPage() {
         <table className="w-full text-sm">
           <thead className="bg-gray-50 border-b">
             <tr>
-              <th className="text-left px-4 py-3 font-medium text-gray-500">Name</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-500">Category</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-500">Priority</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-500">Status</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-500">Last Checked</th>
-              <th className="text-right px-4 py-3 font-medium text-gray-500">Actions</th>
+              <th className="text-left px-4 py-3 font-medium text-gray-500">名称</th>
+              <th className="text-left px-4 py-3 font-medium text-gray-500">分类</th>
+              <th className="text-left px-4 py-3 font-medium text-gray-500">优先级</th>
+              <th className="text-left px-4 py-3 font-medium text-gray-500">状态</th>
+              <th className="text-left px-4 py-3 font-medium text-gray-500">最后检查</th>
+              <th className="text-right px-4 py-3 font-medium text-gray-500">操作</th>
             </tr>
           </thead>
           <tbody className="divide-y">
@@ -215,7 +224,7 @@ export default function AccountsPage() {
                         : "bg-gray-100 text-gray-500"
                     }`}
                   >
-                    {a.enabled ? "Active" : "Disabled"}
+                    {a.enabled ? "已启用" : "已禁用"}
                   </span>
                 </td>
                 <td className="px-4 py-3 text-gray-500">
@@ -243,7 +252,7 @@ export default function AccountsPage() {
         </table>
         {accounts?.length === 0 && (
           <div className="text-center py-12 text-gray-400">
-            No accounts configured. Add one to get started.
+            尚未配置任何公众号。添加一个以开始使用。
           </div>
         )}
       </div>

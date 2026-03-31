@@ -38,6 +38,9 @@ export default function WorkflowsPage() {
       setShowForm(false);
       resetForm();
     },
+    onError: (error: Error) => {
+      alert(`创建失败: ${error.message}`);
+    },
   });
 
   const updateMutation = useMutation({
@@ -48,6 +51,9 @@ export default function WorkflowsPage() {
       setEditingId(null);
       resetForm();
     },
+    onError: (error: Error) => {
+      alert(`更新失败: ${error.message}`);
+    },
   });
 
   const deleteMutation = useMutation({
@@ -55,12 +61,18 @@ export default function WorkflowsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["workflows"] });
     },
+    onError: (error: Error) => {
+      alert(`删除失败: ${error.message}`);
+    },
   });
 
   const runMutation = useMutation({
     mutationFn: (id: string) => api.post(`/api/workflows/${id}/run`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["workflows"] });
+    },
+    onError: (error: Error) => {
+      alert(`运行失败: ${error.message}`);
     },
   });
 
@@ -97,18 +109,18 @@ export default function WorkflowsPage() {
   };
 
   const workflowTypes = [
-    { value: "daily_ingest", label: "Daily Ingest" },
-    { value: "midday_refresh", label: "Midday Refresh" },
-    { value: "classify_pending_articles", label: "Classify Pending" },
-    { value: "generate_daily_digest", label: "Generate Digest" },
-    { value: "retry_failed_jobs", label: "Retry Failed" },
-    { value: "login_health_check", label: "Login Health Check" },
+    { value: "daily_ingest", label: "每日采集" },
+    { value: "midday_refresh", label: "午间刷新" },
+    { value: "classify_pending_articles", label: "分类待处理文章" },
+    { value: "generate_daily_digest", label: "生成每日摘要" },
+    { value: "retry_failed_jobs", label: "重试失败任务" },
+    { value: "login_health_check", label: "登录健康检查" },
   ];
 
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold">Workflows</h1>
+        <h1 className="text-2xl font-bold">工作流</h1>
         <button
           onClick={() => {
             resetForm();
@@ -118,7 +130,7 @@ export default function WorkflowsPage() {
           className="flex items-center gap-2 px-4 py-2 bg-gray-900 text-white rounded-md text-sm hover:bg-gray-800"
         >
           <Plus size={16} />
-          {showForm ? "Cancel" : "Add Workflow"}
+          {showForm ? "取消" : "添加工作流"}
         </button>
       </div>
 
@@ -129,7 +141,7 @@ export default function WorkflowsPage() {
         >
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
             <div>
-              <label className="block text-sm font-medium mb-1">Name *</label>
+              <label className="block text-sm font-medium mb-1">名称 *</label>
               <input
                 type="text"
                 required
@@ -141,7 +153,7 @@ export default function WorkflowsPage() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">Type *</label>
+              <label className="block text-sm font-medium mb-1">类型 *</label>
               <select
                 value={form.workflow_type}
                 onChange={(e) =>
@@ -158,7 +170,7 @@ export default function WorkflowsPage() {
             </div>
             <div>
               <label className="block text-sm font-medium mb-1">
-                Cron Expression *
+                Cron 表达式 *
               </label>
               <input
                 type="text"
@@ -172,7 +184,7 @@ export default function WorkflowsPage() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">Timezone</label>
+              <label className="block text-sm font-medium mb-1">时区</label>
               <input
                 type="text"
                 value={form.timezone}
@@ -189,14 +201,14 @@ export default function WorkflowsPage() {
               checked={form.enabled}
               onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
             />
-            Enabled
+            启用
           </label>
           <button
             type="submit"
             disabled={createMutation.isPending || updateMutation.isPending}
             className="px-4 py-2 bg-gray-900 text-white rounded-md text-sm hover:bg-gray-800 disabled:opacity-50"
           >
-            {editingId ? "Update" : "Create"}
+            {editingId ? "更新" : "创建"}
           </button>
         </form>
       )}
@@ -204,12 +216,12 @@ export default function WorkflowsPage() {
       {viewingRuns && (
         <div className="bg-white rounded-lg border p-6 mb-6 shadow-sm">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="font-semibold">Recent Runs</h3>
+            <h3 className="font-semibold">最近运行</h3>
             <button
               onClick={() => setViewingRuns(null)}
               className="text-sm text-gray-500 hover:text-gray-700"
             >
-              Close
+              关闭
             </button>
           </div>
           <div className="space-y-2">
@@ -223,7 +235,7 @@ export default function WorkflowsPage() {
                   <span>
                     {r.started_at
                       ? new Date(r.started_at).toLocaleString()
-                      : "Pending"}
+                      : "等待中"}
                   </span>
                 </div>
                 <div className="flex items-center gap-3">
@@ -238,7 +250,7 @@ export default function WorkflowsPage() {
                         : "bg-gray-100 text-gray-500"
                     }`}
                   >
-                    {r.status}
+                    {r.status === "success" ? "成功" : r.status === "failed" ? "失败" : r.status === "running" ? "运行中" : r.status}
                   </span>
                   <span className="text-gray-400">{r.trigger_type}</span>
                   {r.duration_ms && (
@@ -250,7 +262,7 @@ export default function WorkflowsPage() {
               </div>
             ))}
             {runs?.length === 0 && (
-              <p className="text-sm text-gray-400">No runs yet</p>
+              <p className="text-sm text-gray-400">暂无运行记录</p>
             )}
           </div>
         </div>
@@ -273,28 +285,28 @@ export default function WorkflowsPage() {
                         : "bg-gray-100 text-gray-500"
                     }`}
                   >
-                    {w.enabled ? "Active" : "Disabled"}
+                    {w.enabled ? "已启用" : "已禁用"}
                   </span>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-x-4 gap-y-1 text-sm text-gray-600">
                   <p>
-                    <span className="text-gray-400">Type:</span>{" "}
+                    <span className="text-gray-400">类型:</span>{" "}
                     {w.workflow_type}
                   </p>
                   <p>
-                    <span className="text-gray-400">Schedule:</span>{" "}
+                    <span className="text-gray-400">调度:</span>{" "}
                     <code className="bg-gray-100 px-1 rounded text-xs">
                       {w.cron_expression}
                     </code>
                   </p>
                   <p>
-                    <span className="text-gray-400">Timezone:</span>{" "}
+                    <span className="text-gray-400">时区:</span>{" "}
                     {w.timezone}
                   </p>
                 </div>
                 {w.last_run_at && (
                   <div className="mt-2 text-sm text-gray-500">
-                    Last run: {new Date(w.last_run_at).toLocaleString()} -{" "}
+                    上次运行: {new Date(w.last_run_at).toLocaleString()} -{" "}
                     <span
                       className={
                         w.last_status === "success"
@@ -302,7 +314,7 @@ export default function WorkflowsPage() {
                           : "text-red-600"
                       }
                     >
-                      {w.last_status}
+                      {w.last_status === "success" ? "成功" : "失败"}
                     </span>
                   </div>
                 )}
@@ -311,28 +323,28 @@ export default function WorkflowsPage() {
                 <button
                   onClick={() => runMutation.mutate(w.id)}
                   className="p-2 text-gray-500 hover:text-green-600"
-                  title="Run now"
+                  title="立即运行"
                 >
                   <Play size={16} />
                 </button>
                 <button
                   onClick={() => setViewingRuns(w.id)}
                   className="p-2 text-gray-500 hover:text-blue-600"
-                  title="View runs"
+                  title="查看运行记录"
                 >
                   <Clock size={16} />
                 </button>
                 <button
                   onClick={() => startEdit(w)}
                   className="p-2 text-gray-500 hover:text-gray-700"
-                  title="Edit"
+                  title="编辑"
                 >
                   <Edit2 size={16} />
                 </button>
                 <button
                   onClick={() => deleteMutation.mutate(w.id)}
                   className="p-2 text-gray-500 hover:text-red-600"
-                  title="Delete"
+                  title="删除"
                 >
                   <Trash2 size={16} />
                 </button>
@@ -342,7 +354,7 @@ export default function WorkflowsPage() {
         ))}
         {workflows?.length === 0 && (
           <div className="text-center py-12 text-gray-400">
-            No workflows configured. Add one to automate your pipeline.
+            尚未配置任何工作流。添加工作流以自动化处理流程。
           </div>
         )}
       </div>

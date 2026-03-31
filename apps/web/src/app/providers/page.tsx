@@ -37,6 +37,9 @@ export default function ProvidersPage() {
       setShowForm(false);
       resetForm();
     },
+    onError: (error: Error) => {
+      alert(`创建失败: ${error.message}`);
+    },
   });
 
   const updateMutation = useMutation({
@@ -47,12 +50,18 @@ export default function ProvidersPage() {
       setEditingId(null);
       resetForm();
     },
+    onError: (error: Error) => {
+      alert(`更新失败: ${error.message}`);
+    },
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.delete(`/api/providers/${id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["providers"] });
+    },
+    onError: (error: Error) => {
+      alert(`删除失败: ${error.message}`);
     },
   });
 
@@ -61,6 +70,9 @@ export default function ProvidersPage() {
       api.post(`/api/providers/${id}/test`, { prompt }),
     onSuccess: (data, vars) => {
       setTestResult((prev) => ({ ...prev, [vars.id]: data }));
+    },
+    onError: (error: Error) => {
+      alert(`测试失败: ${error.message}`);
     },
   });
 
@@ -107,7 +119,7 @@ export default function ProvidersPage() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold">Model Configuration</h1>
+        <h1 className="text-2xl font-bold">模型配置</h1>
         <button
           onClick={() => {
             resetForm();
@@ -117,7 +129,7 @@ export default function ProvidersPage() {
           className="flex items-center gap-2 px-4 py-2 bg-gray-900 text-white rounded-md text-sm hover:bg-gray-800"
         >
           <Plus size={16} />
-          {showForm ? "Cancel" : "Add Provider"}
+          {showForm ? "取消" : "添加提供商"}
         </button>
       </div>
 
@@ -129,7 +141,7 @@ export default function ProvidersPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
             <div>
               <label className="block text-sm font-medium mb-1">
-                Provider Name *
+                提供商名称 *
               </label>
               <input
                 type="text"
@@ -137,7 +149,7 @@ export default function ProvidersPage() {
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
                 className="w-full px-3 py-2 border rounded-md text-sm"
-                placeholder="e.g. OpenAI, DeepSeek, SiliconFlow"
+                placeholder="例如: OpenAI, DeepSeek, SiliconFlow"
               />
             </div>
             <div>
@@ -163,12 +175,12 @@ export default function ProvidersPage() {
                 value={form.api_key}
                 onChange={(e) => setForm({ ...form, api_key: e.target.value })}
                 className="w-full px-3 py-2 border rounded-md text-sm"
-                placeholder={editingId ? "Leave blank to keep current" : "sk-..."}
+                placeholder={editingId ? "留空保持当前值" : "sk-..."}
               />
             </div>
             <div>
               <label className="block text-sm font-medium mb-1">
-                Default Model *
+                默认模型 *
               </label>
               <input
                 type="text"
@@ -183,7 +195,7 @@ export default function ProvidersPage() {
             </div>
             <div>
               <label className="block text-sm font-medium mb-1">
-                Timeout (seconds)
+                超时时间（秒）
               </label>
               <input
                 type="number"
@@ -196,7 +208,7 @@ export default function ProvidersPage() {
             </div>
             <div>
               <label className="block text-sm font-medium mb-1">
-                Max Retries
+                最大重试次数
               </label>
               <input
                 type="number"
@@ -216,7 +228,7 @@ export default function ProvidersPage() {
                 checked={form.enabled}
                 onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
               />
-              Enabled
+              启用
             </label>
             <label className="flex items-center gap-2 text-sm">
               <input
@@ -226,7 +238,7 @@ export default function ProvidersPage() {
                   setForm({ ...form, is_default_for_relevance: e.target.checked })
                 }
               />
-              Default for Relevance
+              相关性默认
             </label>
             <label className="flex items-center gap-2 text-sm">
               <input
@@ -236,7 +248,7 @@ export default function ProvidersPage() {
                   setForm({ ...form, is_default_for_extraction: e.target.checked })
                 }
               />
-              Default for Extraction
+              提取默认
             </label>
             <label className="flex items-center gap-2 text-sm">
               <input
@@ -246,7 +258,7 @@ export default function ProvidersPage() {
                   setForm({ ...form, is_default_for_digest: e.target.checked })
                 }
               />
-              Default for Digest
+              摘要默认
             </label>
           </div>
 
@@ -255,7 +267,7 @@ export default function ProvidersPage() {
             disabled={createMutation.isPending || updateMutation.isPending}
             className="px-4 py-2 bg-gray-900 text-white rounded-md text-sm hover:bg-gray-800 disabled:opacity-50"
           >
-            {editingId ? "Update" : "Create"}
+            {editingId ? "更新" : "创建"}
           </button>
         </form>
       )}
@@ -277,7 +289,7 @@ export default function ProvidersPage() {
                         : "bg-gray-100 text-gray-500"
                     }`}
                   >
-                    {p.enabled ? "Active" : "Disabled"}
+                    {p.enabled ? "已启用" : "已禁用"}
                   </span>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1 text-sm text-gray-600">
@@ -286,7 +298,7 @@ export default function ProvidersPage() {
                     {p.base_url}
                   </p>
                   <p>
-                    <span className="text-gray-400">Model:</span>{" "}
+                    <span className="text-gray-400">模型:</span>{" "}
                     {p.default_model}
                   </p>
                   <p>
@@ -309,13 +321,13 @@ export default function ProvidersPage() {
                     </button>
                   </p>
                   <p>
-                    <span className="text-gray-400">Timeout:</span>{" "}
-                    {p.request_timeout}s / Retries: {p.max_retries}
+                    <span className="text-gray-400">超时:</span>{" "}
+                    {p.request_timeout}s / 重试: {p.max_retries}
                   </p>
                 </div>
                 {p.last_test_status && (
                   <div className="mt-2 text-sm">
-                    <span className="text-gray-400">Last test:</span>{" "}
+                    <span className="text-gray-400">最近测试:</span>{" "}
                     <span
                       className={
                         p.last_test_status === "success"
@@ -323,7 +335,7 @@ export default function ProvidersPage() {
                           : "text-red-600"
                       }
                     >
-                      {p.last_test_status}
+                      {p.last_test_status === "success" ? "成功" : "失败"}
                     </span>
                     {p.last_test_message && (
                       <span className="ml-2 text-gray-500">
@@ -335,17 +347,17 @@ export default function ProvidersPage() {
                 <div className="flex flex-wrap gap-2 mt-2">
                   {p.is_default_for_relevance && (
                     <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-xs">
-                      Relevance
+                      相关性
                     </span>
                   )}
                   {p.is_default_for_extraction && (
                     <span className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded-full text-xs">
-                      Extraction
+                      提取
                     </span>
                   )}
                   {p.is_default_for_digest && (
                     <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full text-xs">
-                      Digest
+                      摘要
                     </span>
                   )}
                 </div>
@@ -354,21 +366,21 @@ export default function ProvidersPage() {
                 <button
                   onClick={() => testMutation.mutate({ id: p.id, prompt: "Say hello" })}
                   className="p-2 text-gray-500 hover:text-blue-600"
-                  title="Test connection"
+                  title="测试连接"
                 >
                   <TestTube size={16} />
                 </button>
                 <button
                   onClick={() => startEdit(p)}
                   className="p-2 text-gray-500 hover:text-gray-700"
-                  title="Edit"
+                  title="编辑"
                 >
                   <Edit2 size={16} />
                 </button>
                 <button
                   onClick={() => deleteMutation.mutate(p.id)}
                   className="p-2 text-gray-500 hover:text-red-600"
-                  title="Delete"
+                  title="删除"
                 >
                   <Trash2 size={16} />
                 </button>
@@ -384,11 +396,11 @@ export default function ProvidersPage() {
               >
                 {testResult[p.id].success ? (
                   <p>
-                    Test passed ({testResult[p.id].latency_ms}ms):{" "}
+                    测试通过 ({testResult[p.id].latency_ms}ms):{" "}
                     {testResult[p.id].response}
                   </p>
                 ) : (
-                  <p>Test failed: {testResult[p.id].error}</p>
+                  <p>测试失败: {testResult[p.id].error}</p>
                 )}
               </div>
             )}
@@ -396,7 +408,7 @@ export default function ProvidersPage() {
         ))}
         {providers?.length === 0 && (
           <div className="text-center py-12 text-gray-400">
-            No providers configured. Add one to get started.
+            尚未配置任何提供商。添加一个以开始使用。
           </div>
         )}
       </div>

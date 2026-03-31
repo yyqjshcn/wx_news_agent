@@ -32,6 +32,9 @@ export default function KeywordsPage() {
       setShowForm(false);
       resetForm();
     },
+    onError: (error: Error) => {
+      alert(`创建失败: ${error.message}`);
+    },
   });
 
   const updateMutation = useMutation({
@@ -42,12 +45,18 @@ export default function KeywordsPage() {
       setEditingId(null);
       resetForm();
     },
+    onError: (error: Error) => {
+      alert(`更新失败: ${error.message}`);
+    },
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.delete(`/api/keywords/${id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["keywords"] });
+    },
+    onError: (error: Error) => {
+      alert(`删除失败: ${error.message}`);
     },
   });
 
@@ -57,6 +66,9 @@ export default function KeywordsPage() {
       queryClient.invalidateQueries({ queryKey: ["keywords"] });
       setShowBulk(false);
       setBulkText("");
+    },
+    onError: (error: Error) => {
+      alert(`导入失败: ${error.message}`);
     },
   });
 
@@ -112,6 +124,13 @@ export default function KeywordsPage() {
     exclude: "bg-red-100 text-red-700",
   };
 
+  const typeLabels: Record<string, string> = {
+    industry: "行业",
+    company: "公司",
+    event: "事件",
+    exclude: "排除",
+  };
+
   const grouped = (keywords || []).reduce((acc: any, k: any) => {
     if (!acc[k.keyword_type]) acc[k.keyword_type] = [];
     acc[k.keyword_type].push(k);
@@ -121,14 +140,14 @@ export default function KeywordsPage() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold">Keywords</h1>
+        <h1 className="text-2xl font-bold">关键词管理</h1>
         <div className="flex gap-2">
           <button
             onClick={() => setShowBulk(!showBulk)}
             className="flex items-center gap-2 px-4 py-2 border rounded-md text-sm hover:bg-gray-50"
           >
             <Upload size={16} />
-            Bulk Import
+            批量导入
           </button>
           <button
             onClick={() => {
@@ -139,24 +158,24 @@ export default function KeywordsPage() {
             className="flex items-center gap-2 px-4 py-2 bg-gray-900 text-white rounded-md text-sm hover:bg-gray-800"
           >
             <Plus size={16} />
-            {showForm ? "Cancel" : "Add Keyword"}
+            {showForm ? "取消" : "添加关键词"}
           </button>
         </div>
       </div>
 
       {showBulk && (
         <div className="bg-white rounded-lg border p-6 mb-6 shadow-sm">
-          <h3 className="font-medium mb-3">Bulk Import</h3>
+          <h3 className="font-medium mb-3">批量导入</h3>
           <div className="flex gap-3 mb-3">
             <select
               value={form.keyword_type}
               onChange={(e) => setForm({ ...form, keyword_type: e.target.value })}
               className="px-3 py-2 border rounded-md text-sm"
             >
-              <option value="industry">Industry</option>
-              <option value="company">Company</option>
-              <option value="event">Event</option>
-              <option value="exclude">Exclude</option>
+              <option value="industry">行业</option>
+              <option value="company">公司</option>
+              <option value="event">事件</option>
+              <option value="exclude">排除</option>
             </select>
             <input
               type="number"
@@ -172,14 +191,14 @@ export default function KeywordsPage() {
             onChange={(e) => setBulkText(e.target.value)}
             className="w-full px-3 py-2 border rounded-md text-sm"
             rows={6}
-            placeholder="One keyword per line..."
+            placeholder="每行一个关键词..."
           />
           <button
             onClick={handleBulkImport}
             disabled={importMutation.isPending || !bulkText.trim()}
             className="mt-3 px-4 py-2 bg-gray-900 text-white rounded-md text-sm hover:bg-gray-800 disabled:opacity-50"
           >
-            Import
+            导入
           </button>
         </div>
       )}
@@ -191,7 +210,7 @@ export default function KeywordsPage() {
         >
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
             <div className="md:col-span-2">
-              <label className="block text-sm font-medium mb-1">Keyword *</label>
+              <label className="block text-sm font-medium mb-1">关键词 *</label>
               <input
                 type="text"
                 required
@@ -201,7 +220,7 @@ export default function KeywordsPage() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">Type</label>
+              <label className="block text-sm font-medium mb-1">类型</label>
               <select
                 value={form.keyword_type}
                 onChange={(e) =>
@@ -209,14 +228,14 @@ export default function KeywordsPage() {
                 }
                 className="w-full px-3 py-2 border rounded-md text-sm"
               >
-                <option value="industry">Industry</option>
-                <option value="company">Company</option>
-                <option value="event">Event</option>
-                <option value="exclude">Exclude</option>
+                <option value="industry">行业</option>
+                <option value="company">公司</option>
+                <option value="event">事件</option>
+                <option value="exclude">排除</option>
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">Weight</label>
+              <label className="block text-sm font-medium mb-1">权重</label>
               <input
                 type="number"
                 min={1}
@@ -235,14 +254,14 @@ export default function KeywordsPage() {
               checked={form.enabled}
               onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
             />
-            Enabled
+            启用
           </label>
           <button
             type="submit"
             disabled={createMutation.isPending || updateMutation.isPending}
             className="px-4 py-2 bg-gray-900 text-white rounded-md text-sm hover:bg-gray-800 disabled:opacity-50"
           >
-            {editingId ? "Update" : "Create"}
+            {editingId ? "更新" : "创建"}
           </button>
         </form>
       )}
@@ -250,7 +269,7 @@ export default function KeywordsPage() {
       {Object.entries(grouped).map(([type, kws]: [string, any]) => (
         <div key={type} className="mb-6">
           <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">
-            {type}
+            {typeLabels[type] || type}
           </h3>
           <div className="flex flex-wrap gap-2">
             {kws.map((k: any) => (
@@ -263,7 +282,7 @@ export default function KeywordsPage() {
                 <span className={typeColors[k.keyword_type] || "bg-gray-100"}>
                   {k.keyword}
                 </span>
-                <span className="text-gray-400 text-xs">w:{k.weight}</span>
+                <span className="text-gray-400 text-xs">权重:{k.weight}</span>
                 <button
                   onClick={() => startEdit(k)}
                   className="text-gray-400 hover:text-gray-700"
@@ -284,7 +303,7 @@ export default function KeywordsPage() {
 
       {keywords?.length === 0 && (
         <div className="text-center py-12 text-gray-400">
-          No keywords configured. Add some to improve article classification.
+          尚未配置任何关键词。添加关键词以提高文章分类效果。
         </div>
       )}
     </div>

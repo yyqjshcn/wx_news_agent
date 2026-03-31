@@ -50,7 +50,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-embodied_news}:${POSTGRES_PASSWORD:-embodied_news_password}@postgres:5432/${POSTGRES_DB:-embodied_news}
       - REDIS_URL=redis://redis:6379/0
-      - WECHAT_ADAPTER_URL=http://wechat-adapter:8080
+      - WECHAT_ADAPTER_URL=http://wechat-adapter:5000
     depends_on:
       postgres:
         condition: service_healthy
@@ -71,7 +71,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-embodied_news}:${POSTGRES_PASSWORD:-embodied_news_password}@postgres:5432/${POSTGRES_DB:-embodied_news}
       - REDIS_URL=redis://redis:6379/0
-      - WECHAT_ADAPTER_URL=http://wechat-adapter:8080
+      - WECHAT_ADAPTER_URL=http://wechat-adapter:5000
     depends_on:
       postgres:
         condition: service_healthy
@@ -94,7 +94,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-embodied_news}:${POSTGRES_PASSWORD:-embodied_news_password}@postgres:5432/${POSTGRES_DB:-embodied_news}
       - REDIS_URL=redis://redis:6379/0
-      - WECHAT_ADAPTER_URL=http://wechat-adapter:8080
+      - WECHAT_ADAPTER_URL=http://wechat-adapter:5000
     depends_on:
       postgres:
         condition: service_healthy
@@ -115,7 +115,8 @@ services:
     ports:
       - "${WEB_PORT:-3000}:3000"
     environment:
-      - NEXT_PUBLIC_API_URL=http://api:8000
+      - INTERNAL_API_URL=http://api:8000
+      - INTERNAL_WECHAT_ADAPTER_URL=http://wechat-adapter:5000
     depends_on:
       - api
     volumes:
@@ -126,17 +127,18 @@ services:
       - embodied-news-network
 
   wechat-adapter:
-    image: ghcr.io/your-org/wechat-download-api:latest
+    image: tmwgsicp/wechat-download-api:latest
     container_name: embodied-news-wechat-adapter
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "5000:5000"
     volumes:
-      - wechat_data:/data
+      - wechat_data:/app/data
     networks:
       - embodied-news-network
-    profiles:
-      - wechat
+    environment:
+      - PORT=5000
+      - HOST=0.0.0.0
 
   nginx:
     image: nginx:alpine
