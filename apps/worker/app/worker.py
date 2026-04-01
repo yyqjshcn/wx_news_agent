@@ -25,6 +25,8 @@ celery_app = Celery(
     backend=settings.REDIS_URL,
 )
 
+import app.tasks  # noqa: F401 - ensures tasks are registered
+
 celery_app.conf.update(
     task_serializer="json",
     accept_content=["json"],

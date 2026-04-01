@@ -70,6 +70,7 @@ export default function WorkflowsPage() {
     mutationFn: (id: string) => api.post(`/api/workflows/${id}/run`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["workflows"] });
+      queryClient.invalidateQueries({ queryKey: ["workflow-runs"] });
     },
     onError: (error: Error) => {
       alert(`运行失败: ${error.message}`);

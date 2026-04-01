@@ -6,6 +6,7 @@ from app.schemas.source_account import (
     SourceAccountResolveRequest,
 )
 from app.services import source_account_service
+from app.services.wechat_adapter import wechat_adapter
 
 router = APIRouter(prefix="/api/source-accounts", tags=["source-accounts"])
 
@@ -56,6 +57,12 @@ async def resolve_fakeid(
     await db.commit()
     await db.refresh(account)
     return account
+
+
+@router.get("/search")
+async def search_wechat_accounts(query: str, db: AsyncSession = Depends(get_db)):
+    results = await wechat_adapter.search_account(query)
+    return results
 
 
 @router.post("/{account_id}/fetch-latest")

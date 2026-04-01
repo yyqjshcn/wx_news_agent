@@ -31,14 +31,29 @@ async def test_provider_connectivity(
         async with httpx.AsyncClient(timeout=provider.request_timeout) as client:
             response = await client.post(url, json=payload, headers=headers)
             latency_ms = (time.time() - start) * 1000
-            response.raise_for_status()
-            data = response.json()
+
+            if response.status_code != 200:
+                error_body = response.text[:500]
+                raise Exception(f"HTTP {response.status_code}: {error_body}")
+
+            try:
+                data = response.json()
+            except Exception:
+                raise Exception(f"Invalid response from provider (status={response.status_code}, body={response.text[:200]})")
+
             content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
             return LlmProviderTestResponse(
                 success=True,
                 response=content,
                 latency_ms=round(latency_ms, 2),
             )
+    except httpx.RequestError as e:
+        latency_ms = (time.time() - start) * 1000
+        return LlmProviderTestResponse(
+            success=False,
+            error=f"Connection failed: {e}",
+            latency_ms=round(latency_ms, 2),
+        )
     except Exception as e:
         latency_ms = (time.time() - start) * 1000
         return LlmProviderTestResponse(

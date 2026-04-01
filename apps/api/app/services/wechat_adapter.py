@@ -90,6 +90,8 @@ class WechatAdapter:
                     params={"query": query}
                 )
                 data = resp.json()
+                if data.get("success"):
+                    return data.get("data", {}).get("list", [])
                 return data.get("list", [])
         except Exception:
             return []
@@ -102,7 +104,10 @@ class WechatAdapter:
                     f"{self.base_url}/api/public/articles",
                     params={"fakeid": fakeid, "begin": begin, "count": count},
                 )
-                return resp.json().get("list", resp.json().get("articles", []))
+                data = resp.json()
+                if data.get("success"):
+                    return data.get("data", {}).get("articles", [])
+                return data.get("list", data.get("articles", []))
         except Exception:
             return []
 
