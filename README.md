@@ -10,19 +10,15 @@
 - **每日摘要** — LLM 生成结构化日报，支持主题分组与编辑观点
 - **飞书推送** — 配置群机器人 Webhook，一键或自动发送摘要
 - **邮件推送** — 配置 SMTP，发送 HTML 格式摘要到指定邮箱
-- **工作流调度** — Cron 定时任务，实时查看运行状态
+- **工作流调度** — APScheduler 定时任务，实时查看运行状态
 - **模型配置** — 兼容 OpenAI 接口的任意 LLM 提供商
 
 ## 快速开始
 
 ### 前置条件
 
-- Windows
-   - 安装了 WSL 2 的 Windows（推荐 Ubuntu 22.04+）
-   - 使用 WSL 2 后端的 Docker Desktop
-   - 代码目录需位于 WSL 文件系统内（不要放在 `/mnt/c/...`）
-- Linux
-   - 有 Docker + Docker Compose
+- Docker + Docker Compose
+- 支持 Linux、macOS、Windows (WSL 2)
 
 ### 1. 克隆与配置
 
@@ -143,10 +139,9 @@ docker compose up -d
 wx_news_agent/
 ├── apps/
 │   ├── web/                  # Next.js 前端
-│   ├── api/                  # FastAPI 后端
-│   └── worker/               # Celery 工作进程 + 定时任务
+│   └── api/                  # FastAPI 后端 (含 APScheduler 定时任务)
 ├── infra/
-│   └── nginx/                # Nginx 反向代理
+│   └── nginx/                # Nginx 反向代理 (可选)
 ├── docker-compose.yml
 ├── .env.example
 └── README.md
@@ -157,11 +152,18 @@ wx_news_agent/
 | 层 | 技术 |
 |----|------|
 | 前端 | Next.js 15 + TypeScript + Tailwind CSS + React Query |
-| 后端 API | FastAPI (Python 3.11) |
-| 任务队列 | Celery + Redis + Celery Beat |
-| 数据库 | PostgreSQL 16 |
+| 后端 API | FastAPI (Python 3.13) |
+| 定时任务 | APScheduler (内置于 API 进程) |
+| 数据库 | SQLite (单文件，零配置) |
 | 微信适配器 | wechat-download-api |
 | LLM | OpenAI 兼容接口（任意提供商） |
+
+### 架构特点
+
+- **轻量部署**：仅 3 个容器（api + web + wechat-adapter），无需 Redis/PostgreSQL/Celery
+- **零配置数据库**：SQLite 单文件存储，备份只需复制 `.db` 文件
+- **内置调度**：APScheduler 直接在 API 进程中运行定时任务，无需额外 worker
+- **单用户优化**：所有技术选型针对个人/小团队使用场景
 
 ## 开发
 
@@ -181,14 +183,7 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
-### 工作进程
-
-```bash
-cd apps/worker
-pip install -r requirements.txt
-celery -A app.worker worker --loglevel=info
-celery -A app.worker beat --loglevel=info
-```
+> 定时任务会在 API 启动时自动注册，无需额外启动 worker。
 
 ## 环境变量
 
@@ -196,8 +191,7 @@ celery -A app.worker beat --loglevel=info
 
 | 变量 | 说明 |
 |------|------|
-| `DATABASE_URL` | PostgreSQL 连接字符串 |
-| `REDIS_URL` | Redis 连接字符串 |
+| `DATABASE_URL` | 数据库连接（默认 `sqlite:///./data/embodied_news.db`） |
 | `WECHAT_ADAPTER_URL` | 微信适配器服务 URL |
 | `ENCRYPTION_KEY` | 32 字节十六进制密钥，用于加密 API Key 等敏感信息 |
 | `SECRET_KEY` | 应用密钥 |

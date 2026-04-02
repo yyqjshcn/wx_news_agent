@@ -7,19 +7,11 @@ from app.schemas.workflow import (
 )
 from app.services import workflow_service
 from app.models.workflow import TriggerType, WorkflowType, WorkflowRunStatus
-from app.core.celery_client import celery_app
+from app.core.scheduler import run_workflow_task, TASK_MAP
+from app.core.background_tasks import schedule_workflow_run
 import logging
 
 logger = logging.getLogger(__name__)
-
-WORKFLOW_TASK_MAP = {
-    WorkflowType.DAILY_INGEST: "app.tasks.daily_ingest",
-    WorkflowType.MIDDAY_REFRESH: "app.tasks.daily_ingest",
-    WorkflowType.CLASSIFY_PENDING: "app.tasks.classify_article",
-    WorkflowType.GENERATE_DIGEST: "app.tasks.generate_daily_digest",
-    WorkflowType.RETRY_FAILED: "app.tasks.daily_ingest",
-    WorkflowType.LOGIN_HEALTH_CHECK: "app.tasks.check_wechat_login_health",
-}
 
 router = APIRouter(prefix="/api/workflows", tags=["workflows"])
 
@@ -62,20 +54,16 @@ async def run_workflow(workflow_id: str, db: AsyncSession = Depends(get_db)):
     if not workflow:
         raise HTTPException(status_code=404, detail="Workflow not found")
     
-    run = await workflow_service.create_workflow_run(db, workflow_id, TriggerType.MANUAL)
-    
-    task_name = WORKFLOW_TASK_MAP.get(workflow.workflow_type)
-    if not task_name:
+    task_fn = TASK_MAP.get(workflow.workflow_type)
+    if not task_fn:
         raise HTTPException(status_code=400, detail=f"Unknown workflow type: {workflow.workflow_type}")
     
-    try:
-        celery_app.send_task(task_name, args=[run.id])
-        await workflow_service.update_workflow_run(db, run.id, status=WorkflowRunStatus.RUNNING)
-        return {"message": "Workflow run started", "run_id": run.id}
-    except Exception as e:
-        logger.error(f"Failed to dispatch task for run {run.id}: {e}")
-        await workflow_service.update_workflow_run(db, run.id, status=WorkflowRunStatus.FAILED, error_message=str(e))
-        raise HTTPException(status_code=500, detail=f"Failed to dispatch task: {e}")
+    run = await workflow_service.create_workflow_run(db, workflow_id, TriggerType.MANUAL)
+    
+    schedule_workflow_run(run.id, workflow.workflow_type.value, task_fn)
+    
+    await workflow_service.update_workflow_run(db, run.id, status=WorkflowRunStatus.RUNNING)
+    return {"message": "Workflow run started", "run_id": run.id}
 
 
 @router.get("/{workflow_id}/runs", response_model=list[WorkflowRunResponse])

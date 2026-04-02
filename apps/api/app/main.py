@@ -3,12 +3,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.routers import providers, source_accounts, keywords, workflows, content, wechat, system, feishu_webhooks, email_configs
 from app.db.database import engine
 from app.db.base import Base
+from app.core.scheduler import start_scheduler, stop_scheduler
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    
+    scheduler = await start_scheduler()
     yield
+    await stop_scheduler(scheduler)
 
 
 app = FastAPI(

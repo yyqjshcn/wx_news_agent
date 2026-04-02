@@ -29,10 +29,6 @@ build/
 .DS_Store
 Thumbs.db
 
-# Docker
-postgres_data/
-redis_data/
-
 # Logs
 *.log
 logs/
@@ -44,4 +40,22 @@ htmlcov/
 
 # Next.js
 next-env.d.ts
+
+# Data (SQLite database, migration scripts output)
+data/
+*.db
+*.sqlite3
+
+# Celery / Worker artifacts
+celerybeat-schedule
+apps/worker/celerybeat-schedule
+
+# Docker volumes (local data)
+postgres_data/
+redis_data/
+wechat_data/
+sqlite_data/
+
+# Migration scripts (one-time use, not needed in repo)
+scripts/
 apps/worker/celerybeat-schedule
