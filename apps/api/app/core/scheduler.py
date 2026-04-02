@@ -799,6 +799,10 @@ async def run_workflow_task(workflow_id: str, trigger_type: TriggerType = Trigge
         logger.error(f"Workflow {workflow_id} execution failed: {e}")
 
 
+# Global scheduler instance
+_scheduler: AsyncIOScheduler | None = None
+
+
 def get_scheduler():
     """Create and configure the APScheduler instance."""
     scheduler = AsyncIOScheduler()
@@ -808,10 +812,50 @@ def get_scheduler():
     return scheduler
 
 
-async def start_scheduler():
-    """Initialize scheduler with workflow schedules from database."""
-    scheduler = get_scheduler()
+def get_current_scheduler() -> AsyncIOScheduler | None:
+    """Get the current running scheduler instance."""
+    return _scheduler
 
+
+async def _add_workflow_job(scheduler: AsyncIOScheduler, workflow: Workflow):
+    """Add a single workflow job to the scheduler."""
+    if not workflow.cron_expression:
+        logger.warning(f"Workflow '{workflow.workflow_name}' has no cron expression, skipping")
+        return False
+
+    parts = workflow.cron_expression.split()
+    if len(parts) != 5:
+        logger.warning(f"Invalid cron expression for {workflow.workflow_name}: {workflow.cron_expression}")
+        return False
+
+    minute, hour, day, month, day_of_week = parts
+
+    trigger = CronTrigger(
+        minute=minute,
+        hour=hour,
+        day=day,
+        month=month,
+        day_of_week=day_of_week,
+        timezone=workflow.timezone or "UTC",
+    )
+
+    scheduler.add_job(
+        run_workflow_task,
+        trigger,
+        args=[workflow.id, TriggerType.SCHEDULED],
+        id=f"workflow_{workflow.id}",
+        name=workflow.workflow_name,
+        replace_existing=True,
+    )
+    logger.info(
+        f"Scheduled workflow '{workflow.workflow_name}' ({workflow.id}) "
+        f"with cron: {workflow.cron_expression}"
+    )
+    return True
+
+
+async def _load_workflows_to_scheduler(scheduler: AsyncIOScheduler):
+    """Load all enabled workflows from database to scheduler."""
     session = async_session()
     try:
         result = await session.execute(
@@ -820,47 +864,187 @@ async def start_scheduler():
         workflows = result.scalars().all()
 
         for workflow in workflows:
-            if not workflow.cron_expression:
-                continue
-
-            parts = workflow.cron_expression.split()
-            if len(parts) != 5:
-                logger.warning(f"Invalid cron expression for {workflow.workflow_name}: {workflow.cron_expression}")
-                continue
-
-            minute, hour, day, month, day_of_week = parts
-
-            trigger = CronTrigger(
-                minute=minute,
-                hour=hour,
-                day=day,
-                month=month,
-                day_of_week=day_of_week,
-                timezone=workflow.timezone or "UTC",
-            )
-
-            scheduler.add_job(
-                run_workflow_task,
-                trigger,
-                args=[workflow.id, TriggerType.SCHEDULED],
-                id=f"workflow_{workflow.id}",
-                name=workflow.workflow_name,
-                replace_existing=True,
-            )
-            logger.info(
-                f"Scheduled workflow '{workflow.workflow_name}' ({workflow.id}) "
-                f"with cron: {workflow.cron_expression}"
-            )
+            await _add_workflow_job(scheduler, workflow)
     finally:
         await session.close()
 
-    scheduler.start()
-    logger.info(f"Scheduler started with {len(scheduler.get_jobs())} jobs")
-    return scheduler
+
+async def reload_scheduler_workflows(scheduler: AsyncIOScheduler | None = None):
+    """Reload all workflow schedules from database.
+    
+    This function can be called to dynamically refresh the scheduler
+    when workflows are modified via API.
+    """
+    if scheduler is None:
+        scheduler = _scheduler
+    
+    if not scheduler or not scheduler.running:
+        logger.warning("Scheduler is not running, cannot reload workflows")
+        return
+
+    logger.info("Reloading workflow schedules from database...")
+    
+    session = async_session()
+    try:
+        # Get all enabled workflows from database
+        result = await session.execute(
+            select(Workflow).where(Workflow.enabled == True)
+        )
+        workflows = result.scalars().all()
+        workflow_map = {w.id: w for w in workflows}
+        
+        # Get current workflow jobs
+        current_job_ids = {
+            job.id for job in scheduler.get_jobs()
+            if job.id.startswith("workflow_")
+        }
+        current_workflow_ids = {
+            job.id.replace("workflow_", "") for job in scheduler.get_jobs()
+            if job.id.startswith("workflow_")
+        }
+        
+        # Remove jobs for disabled or deleted workflows
+        for job_id in current_job_ids:
+            workflow_id = job_id.replace("workflow_", "")
+            if workflow_id not in workflow_map:
+                scheduler.remove_job(job_id)
+                logger.info(f"Removed job {job_id} (workflow disabled or deleted)")
+        
+        # Add or update jobs for enabled workflows
+        for workflow in workflows:
+            job_id = f"workflow_{workflow.id}"
+            existing_job = scheduler.get_job(job_id)
+            
+            if existing_job:
+                # Check if cron expression or timezone changed
+                # We need to compare the trigger settings
+                current_trigger = existing_job.trigger
+                parts = workflow.cron_expression.split()
+                if len(parts) == 5:
+                    minute, hour, day, month, day_of_week = parts
+                    # If trigger differs, remove and re-add
+                    if (current_trigger.fields[0].__str__() != minute or
+                        current_trigger.fields[1].__str__() != hour or
+                        current_trigger.fields[2].__str__() != day or
+                        current_trigger.fields[3].__str__() != month or
+                        current_trigger.fields[4].__str__() != day_of_week):
+                        scheduler.remove_job(job_id)
+                        await _add_workflow_job(scheduler, workflow)
+                        logger.info(f"Updated job {job_id} (cron expression changed)")
+            else:
+                # New workflow, add it
+                await _add_workflow_job(scheduler, workflow)
+        
+        logger.info(f"Workflow reload complete. Total jobs: {len([j for j in scheduler.get_jobs() if j.id.startswith('workflow_')])}")
+    finally:
+        await session.close()
+
+
+async def add_workflow_to_scheduler(workflow_id: str):
+    """Add a single workflow to the scheduler.
+    
+    Called when a new workflow is created.
+    """
+    global _scheduler
+    if not _scheduler or not _scheduler.running:
+        logger.warning("Scheduler is not running, cannot add workflow")
+        return
+    
+    session = async_session()
+    try:
+        workflow = await session.get(Workflow, workflow_id)
+        if not workflow or not workflow.enabled:
+            logger.warning(f"Workflow {workflow_id} not found or disabled")
+            return
+        
+        await _add_workflow_job(_scheduler, workflow)
+    finally:
+        await session.close()
+
+
+async def remove_workflow_from_scheduler(workflow_id: str):
+    """Remove a workflow from the scheduler.
+    
+    Called when a workflow is deleted or disabled.
+    """
+    global _scheduler
+    if not _scheduler or not _scheduler.running:
+        logger.warning("Scheduler is not running, cannot remove workflow")
+        return
+    
+    job_id = f"workflow_{workflow_id}"
+    try:
+        _scheduler.remove_job(job_id)
+        logger.info(f"Removed job {job_id}")
+    except Exception as e:
+        logger.warning(f"Failed to remove job {job_id}: {e}")
+
+
+async def update_workflow_in_scheduler(workflow_id: str):
+    """Update a workflow in the scheduler.
+    
+    Called when a workflow is updated (cron expression, enabled status, etc.)
+    """
+    global _scheduler
+    if not _scheduler or not _scheduler.running:
+        logger.warning("Scheduler is not running, cannot update workflow")
+        return
+    
+    session = async_session()
+    try:
+        workflow = await session.get(Workflow, workflow_id)
+        if not workflow:
+            # Workflow deleted, remove from scheduler
+            await remove_workflow_from_scheduler(workflow_id)
+            return
+        
+        job_id = f"workflow_{workflow_id}"
+        existing_job = _scheduler.get_job(job_id)
+        
+        if not workflow.enabled:
+            # Workflow disabled, remove from scheduler
+            if existing_job:
+                await remove_workflow_from_scheduler(workflow_id)
+            return
+        
+        # Workflow enabled, add or update
+        if existing_job:
+            # Remove old job and add new one (in case cron changed)
+            _scheduler.remove_job(job_id)
+        
+        await _add_workflow_job(_scheduler, workflow)
+    finally:
+        await session.close()
+
+
+async def start_scheduler():
+    """Initialize scheduler with workflow schedules from database."""
+    global _scheduler
+    _scheduler = get_scheduler()
+
+    await _load_workflows_to_scheduler(_scheduler)
+
+    _scheduler.start()
+    logger.info(f"Scheduler started with {len(_scheduler.get_jobs())} jobs")
+    
+    # Add a periodic reload job to check for workflow changes every 60 seconds
+    _scheduler.add_job(
+        lambda: asyncio.create_task(reload_scheduler_workflows(_scheduler)),
+        "interval",
+        seconds=60,
+        id="reload_workflows",
+        name="Reload workflow schedules",
+        replace_existing=True,
+    )
+    logger.info("Added periodic workflow reload job (every 60 seconds)")
+    
+    return _scheduler
 
 
 async def stop_scheduler(scheduler):
     """Shutdown the scheduler."""
+    global _scheduler
     if scheduler and scheduler.running:
         scheduler.shutdown(wait=False)
         logger.info("Scheduler stopped")
+    _scheduler = None

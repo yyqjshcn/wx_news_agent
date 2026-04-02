@@ -7,7 +7,7 @@ from app.schemas.workflow import (
 )
 from app.services import workflow_service
 from app.models.workflow import TriggerType, WorkflowType, WorkflowRunStatus
-from app.core.scheduler import run_workflow_task, TASK_MAP
+from app.core.scheduler import run_workflow_task, TASK_MAP, add_workflow_to_scheduler, update_workflow_in_scheduler, remove_workflow_from_scheduler
 from app.core.background_tasks import schedule_workflow_run
 import logging
 
@@ -27,6 +27,9 @@ async def create_workflow(
     data: WorkflowCreate, db: AsyncSession = Depends(get_db)
 ):
     workflow = await workflow_service.create_workflow(db, data)
+    # Add to scheduler if enabled
+    if workflow.enabled:
+        await add_workflow_to_scheduler(workflow.id)
     return workflow
 
 
@@ -37,11 +40,16 @@ async def update_workflow(
     workflow = await workflow_service.update_workflow(db, workflow_id, data)
     if not workflow:
         raise HTTPException(status_code=404, detail="Workflow not found")
+    # Update scheduler
+    await update_workflow_in_scheduler(workflow_id)
     return workflow
 
 
 @router.delete("/{workflow_id}")
 async def delete_workflow(workflow_id: str, db: AsyncSession = Depends(get_db)):
+    # Remove from scheduler first
+    await remove_workflow_from_scheduler(workflow_id)
+    # Then delete from database
     success = await workflow_service.delete_workflow(db, workflow_id)
     if not success:
         raise HTTPException(status_code=404, detail="Workflow not found")
