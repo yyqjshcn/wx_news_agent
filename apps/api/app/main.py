@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import providers, source_accounts, keywords, workflows, content, wechat, system
+from app.routers import providers, source_accounts, keywords, workflows, content, wechat, system, feishu_webhooks
 from app.db.database import engine
 from app.db.base import Base
 
@@ -33,6 +33,7 @@ app.include_router(workflows.router)
 app.include_router(content.router)
 app.include_router(wechat.router)
 app.include_router(system.router)
+app.include_router(feishu_webhooks.router)
 
 
 @app.get("/api/health")

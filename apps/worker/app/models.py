@@ -99,6 +99,45 @@ class RawArticle(Base):
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
+class DailyDigest(Base):
+    __tablename__ = "daily_digests"
+    id = Column(String, primary_key=True)
+    digest_date = Column(DateTime(timezone=True), nullable=False)
+    content_markdown = Column(Text, nullable=True)
+    content_html = Column(Text, nullable=True)
+    item_count = Column(Integer, default=0)
+    status = Column(String, default="draft")
+    llm_provider_id = Column(String, nullable=True)
+    llm_model = Column(String, nullable=True)
+    generated_at = Column(DateTime(timezone=True), nullable=True)
+    sent_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class LlmProvider(Base):
+    __tablename__ = "llm_providers"
+    id = Column(String, primary_key=True)
+    name = Column(String, nullable=False)
+    provider_type = Column(String, nullable=False, default="openai_compatible")
+    base_url = Column(String, nullable=False)
+    api_key_encrypted = Column(Text, nullable=False)
+    default_model = Column(String, nullable=False)
+    enabled = Column(Boolean, default=True)
+    is_default_for_relevance = Column(Boolean, default=False)
+    is_default_for_extraction = Column(Boolean, default=False)
+    is_default_for_digest = Column(Boolean, default=False)
+    request_timeout = Column(Integer, default=30)
+    max_retries = Column(Integer, default=3)
+    extra_headers_json = Column(JSON, default=dict)
+    extra_query_json = Column(JSON, default=dict)
+    last_test_status = Column(String, nullable=True)
+    last_test_message = Column(Text, nullable=True)
+    last_test_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
 def get_workflow_run(session, run_id: str) -> WorkflowRun | None:
     result = session.execute(select(WorkflowRun).where(WorkflowRun.id == run_id))
     return result.scalar_one_or_none()

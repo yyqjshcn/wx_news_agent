@@ -119,10 +119,6 @@ services:
       - INTERNAL_WECHAT_ADAPTER_URL=http://wechat-adapter:5000
     depends_on:
       - api
-    volumes:
-      - ./apps/web:/app
-      - /app/node_modules
-      - /app/.next
     networks:
       - embodied-news-network
 

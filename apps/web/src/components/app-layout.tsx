@@ -50,7 +50,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         }`}
       >
         <div className="p-6 border-b">
-          <h1 className="text-lg font-bold">具身新闻</h1>
+          <h1 className="text-lg font-bold">微信新闻</h1>
           <p className="text-xs text-gray-500">智能体</p>
         </div>
         <nav className="p-4 space-y-1">
