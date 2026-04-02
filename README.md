@@ -153,17 +153,11 @@ wx_news_agent/
 |----|------|
 | 前端 | Next.js 15 + TypeScript + Tailwind CSS + React Query |
 | 后端 API | FastAPI (Python 3.13) |
-| 定时任务 | APScheduler (内置于 API 进程) |
-| 数据库 | SQLite (单文件，零配置) |
+| 定时任务 | APScheduler |
+| 数据库 | SQLite |
 | 微信适配器 | wechat-download-api |
 | LLM | OpenAI 兼容接口（任意提供商） |
 
-### 架构特点
-
-- **轻量部署**：仅 3 个容器（api + web + wechat-adapter），无需 Redis/PostgreSQL/Celery
-- **零配置数据库**：SQLite 单文件存储，备份只需复制 `.db` 文件
-- **内置调度**：APScheduler 直接在 API 进程中运行定时任务，无需额外 worker
-- **单用户优化**：所有技术选型针对个人/小团队使用场景
 
 ## 开发
 
