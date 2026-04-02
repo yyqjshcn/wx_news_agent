@@ -1,50 +1,168 @@
 # 微信新闻智能体
 
-一个运行在 Windows + WSL 上的本地、自托管微信智能简报系统。
+一个本地自托管的微信智能简报系统。自动从微信公众号采集文章，通过 LLM 生成每日摘要，并推送到飞书群或邮箱。
 
-## 架构
+## 功能特性
 
-- **前端**: Next.js 15 + TypeScript + Tailwind CSS
-- **后端 API**: FastAPI (Python 3.11+)
-- **任务队列**: Celery + Redis + Celery Beat
-- **数据库**: PostgreSQL 16
-- **微信适配器**: 侧车服务 (wechat-download-api)
-- **LLM 网关**: OpenAI 兼容的提供商抽象层
+- **公众号管理** — 添加目标公众号，一键搜索并填充 fakeid
+- **关键词管理** — 按行业、公司、事件分类，支持权重
+- **文章采集** — 自动从公众号抓取文章，按关键词过滤
+- **每日摘要** — LLM 生成结构化日报，支持主题分组与编辑观点
+- **飞书推送** — 配置群机器人 Webhook，一键或自动发送摘要
+- **邮件推送** — 配置 SMTP，发送 HTML 格式摘要到指定邮箱
+- **工作流调度** — Cron 定时任务，实时查看运行状态
+- **模型配置** — 兼容 OpenAI 接口的任意 LLM 提供商
 
 ## 快速开始
 
 ### 前置条件
 
-- 安装了 WSL 2 的 Windows（推荐 Ubuntu）
+- 安装了 WSL 2 的 Windows（推荐 Ubuntu 22.04+）
 - 使用 WSL 2 后端的 Docker Desktop
-- 代码目录需位于 WSL 文件系统内（不要放在 /mnt/c/...）
+- 代码目录需位于 WSL 文件系统内（不要放在 `/mnt/c/...`）
 
-### 设置
+### 1. 克隆与配置
 
 ```bash
-# 1. 复制环境配置文件
+# 克隆项目
+git clone <your-repo-url>
+cd wx_news_agent
+
+# 复制环境配置
 cp .env.example .env
 
-# 2. 生成加密密钥（32 字节十六进制）
+# 生成加密密钥
 python3 -c "import secrets; print(secrets.token_hex(32))"
-# 更新 .env 中的 ENCRYPTION_KEY
+# 将结果填入 .env 中的 ENCRYPTION_KEY
 
-# 3. 生成密钥
 python3 -c "import secrets; print(secrets.token_hex(32))"
-# 更新 .env 中的 SECRET_KEY
-
-# 4. 启动所有服务
-docker compose up -d
-
-# 5. 访问应用
-# 前端: http://localhost:3000
-# API: http://localhost:8000
-# API 文档: http://localhost:8000/docs
+# 将结果填入 .env 中的 SECRET_KEY
 ```
+
+### 2. 启动服务
+
+```bash
+docker compose up -d
+```
+
+启动后可访问：
+
+| 服务 | 地址 |
+|------|------|
+| 前端 | http://localhost:3000 |
+| API | http://localhost:8000 |
+| API 文档 | http://localhost:8000/docs |
+
+## 使用指南
+
+### 第一步：微信登录
+
+1. 进入 **微信登录** 页面
+2. 用微信扫描二维码登录
+3. 确认登录状态显示为"已登录"
+
+> 微信登录态有过期时间，如采集失败请重新扫码。
+
+### 第二步：添加公众号
+
+1. 进入 **公众号管理** 页面
+2. 点击"添加公众号"，填写名称等信息
+3. 点击每行右侧的 🔍 搜索图标
+4. 输入公众号名称搜索，从结果中点击匹配项自动填充 fakeid
+
+> fakeid 是微信内部标识符，必须通过搜索获取。不设置 fakeid 的公众号无法采集文章。
+
+### 第三步：设置关键词
+
+1. 进入 **关键词管理** 页面
+2. 添加你关注的关键词，选择类型（行业/公司/事件）和权重
+3. 采集到的文章如果标题或摘要包含任一关键词，会被标记为"相关"
+
+> 不设置关键词时，所有采集到的文章都会保留但不标记相关性。
+
+### 第四步：配置 LLM 提供商
+
+1. 进入 **模型配置** 页面
+2. 点击"添加提供商"，填写：
+   - 名称（如 onehub、openai）
+   - API 地址（如 `https://api.openai.com/v1`）
+   - API Key
+   - 默认模型（如 `gpt-4o`）
+3. 勾选"用于摘要生成"（生成每日摘要时使用此模型）
+4. 点击"测试"验证连通性
+
+### 第五步：运行工作流
+
+进入 **工作流** 页面，可以看到预设的工作流：
+
+| 工作流 | 说明 | 默认调度 |
+|--------|------|----------|
+| 每日采集 | 从公众号采集文章，按关键词过滤 | 每天 8:00 |
+| 文章分类 | 对已采集但未分类的文章进行分类 | 每 30 分钟 |
+| 生成摘要 | 基于当日文章生成每日摘要 | 每天 20:00 |
+| 登录检查 | 检查微信登录状态 | 每 2 小时 |
+
+点击 ▶ 立即运行，按钮会变为旋转图标，下方显示"运行中..."。完成后自动更新上次运行时间和状态。
+
+### 第六步：查看摘要
+
+进入 **每日摘要** 页面：
+
+- 左侧是历史摘要列表
+- 右侧可切换"渲染"（排版后的 Markdown）和"源码"（原始 Markdown）视图
+- 相关文章标题为可点击链接
+
+### 第七步：推送摘要
+
+#### 推送到飞书
+
+1. 点击 **飞书设置** 按钮
+2. 添加飞书群机器人配置：
+   - 名称（如"AI日报群"）
+   - Webhook URL（从飞书群设置 → 群机器人 → 自定义机器人中获取）
+   - 消息标题、是否包含原文链接
+3. 保存后，在摘要预览页面会出现对应的发送按钮
+4. 勾选"生成后自动发送"可自动推送
+
+#### 推送到邮件
+
+1. 点击 **邮件设置** 按钮
+2. 添加邮件配置：
+   - 名称（如"工作邮箱"）
+   - 发件人邮箱、SMTP 服务器、端口
+   - 邮箱密码或授权码
+   - 收件人列表（逗号分隔）
+3. 保存后，在摘要预览页面会出现对应的发送按钮
+
+## 项目结构
+
+```
+wx_news_agent/
+├── apps/
+│   ├── web/                  # Next.js 前端
+│   ├── api/                  # FastAPI 后端
+│   └── worker/               # Celery 工作进程 + 定时任务
+├── infra/
+│   └── nginx/                # Nginx 反向代理
+├── docker-compose.yml
+├── .env.example
+└── README.md
+```
+
+## 技术栈
+
+| 层 | 技术 |
+|----|------|
+| 前端 | Next.js 15 + TypeScript + Tailwind CSS + React Query |
+| 后端 API | FastAPI (Python 3.11) |
+| 任务队列 | Celery + Redis + Celery Beat |
+| 数据库 | PostgreSQL 16 |
+| 微信适配器 | wechat-download-api |
+| LLM | OpenAI 兼容接口（任意提供商） |
 
 ## 开发
 
-### 前端 (Next.js)
+### 前端
 
 ```bash
 cd apps/web
@@ -52,7 +170,7 @@ npm install
 npm run dev
 ```
 
-### 后端 (FastAPI)
+### 后端
 
 ```bash
 cd apps/api
@@ -60,7 +178,7 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
-### 工作进程 (Celery)
+### 工作进程
 
 ```bash
 cd apps/worker
@@ -69,49 +187,17 @@ celery -A app.worker worker --loglevel=info
 celery -A app.worker beat --loglevel=info
 ```
 
-## 项目结构
-
-```
-embodied-news-agent/
-├── apps/
-│   ├── web/                  # Next.js 前端
-│   ├── api/                  # FastAPI 后端
-│   └── worker/               # Celery 工作进程 + 定时任务
-├── packages/
-│   └── prompt-templates/     # LLM 提示词模板
-├── infra/
-│   ├── docker/               # Docker 配置
-│   └── nginx/                # Nginx 反向代理
-├── docs/                     # 文档
-├── data/                     # 本地数据文件
-├── docker-compose.yml
-├── .env.example
-└── README.md
-```
-
-## 功能特性
-
-- 微信登录状态管理
-- 来源账号（公众号）白名单管理
-- 关键词管理（支持类型和权重）
-- OpenAI 兼容的模型提供商配置
-- 工作流配置与 Cron 定时调度
-- 文章收集、去重与分类
-- 事件提取与归类
-- 每日摘要生成
-- 任务日志与监控
-- 系统统计仪表盘
-
 ## 环境变量
 
-所有可用的配置选项请参见 `.env.example`。
+详见 `.env.example`。关键变量：
 
-关键变量：
-- `DATABASE_URL`: PostgreSQL 连接字符串
-- `REDIS_URL`: Redis 连接字符串
-- `WECHAT_ADAPTER_URL`: 微信侧车服务 URL
-- `ENCRYPTION_KEY`: 32 字节十六进制密钥，用于 API 密钥加密
-- `SECRET_KEY`: 应用密钥
+| 变量 | 说明 |
+|------|------|
+| `DATABASE_URL` | PostgreSQL 连接字符串 |
+| `REDIS_URL` | Redis 连接字符串 |
+| `WECHAT_ADAPTER_URL` | 微信适配器服务 URL |
+| `ENCRYPTION_KEY` | 32 字节十六进制密钥，用于加密 API Key 等敏感信息 |
+| `SECRET_KEY` | 应用密钥 |
 
 ## 许可证
 
