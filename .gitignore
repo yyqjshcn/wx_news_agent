@@ -44,3 +44,4 @@ htmlcov/
 
 # Next.js
 next-env.d.ts
+apps/worker/celerybeat-schedule
