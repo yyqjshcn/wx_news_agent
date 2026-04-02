@@ -112,10 +112,10 @@ export default function WorkflowsPage() {
   const workflowTypes = [
     { value: "daily_ingest", label: "每日采集" },
     { value: "midday_refresh", label: "午间刷新" },
-    { value: "classify_pending_articles", label: "分类待处理文章" },
-    { value: "generate_daily_digest", label: "生成每日摘要" },
+    { value: "classify_pending_articles", label: "文章分类" },
+    { value: "generate_daily_digest", label: "生成摘要" },
     { value: "retry_failed_jobs", label: "重试失败任务" },
-    { value: "login_health_check", label: "登录健康检查" },
+    { value: "login_health_check", label: "登录检查" },
   ];
 
   return (

@@ -59,7 +59,12 @@ def _convert_markdown_to_feishu(text: str) -> str:
 
     Feishu card markdown only supports: **bold**, *italic*, ~~strikethrough~~,
     [link](url), `inline_code`, and lists. It does NOT support # headings.
+
+    Also strips the digest header block (# 每日摘要, **日期**, **共 xx 篇文章**, ---)
+    since the card header already shows the title, date and article count.
     """
+    text = _strip_digest_header(text)
+
     lines = text.split("\n")
     result = []
 
@@ -93,6 +98,48 @@ def _convert_markdown_to_feishu(text: str) -> str:
     return "\n".join(result)
 
 
+def _strip_digest_header(text: str) -> str:
+    """Remove the digest header block from markdown content.
+
+    Strips lines like:
+    # 每日摘要
+    (blank)
+    **日期**: 2026-04-02
+    (blank)
+    **共 52 篇文章**
+    (blank)
+    ---
+    """
+    lines = text.split("\n")
+    skip_until_separator = False
+    found_separator = False
+    result = []
+
+    for line in lines:
+        stripped = line.strip()
+
+        if not found_separator:
+            if stripped.startswith("# 每日摘要") or stripped.startswith("# "):
+                skip_until_separator = True
+                continue
+            if skip_until_separator and stripped.startswith("---"):
+                found_separator = True
+                continue
+            if skip_until_separator:
+                continue
+            if not skip_until_separator and stripped.startswith("# "):
+                skip_until_separator = True
+                continue
+
+        result.append(line)
+
+    if not found_separator:
+        return "\n".join(result)
+
+    cleaned = "\n".join(result).lstrip("\n")
+    return cleaned
+
+
 def _build_feishu_card(
     title: str,
     content: str,
@@ -105,7 +152,7 @@ def _build_feishu_card(
 
     elements.append({
         "tag": "markdown",
-        "content": f"**📅 日期**: {digest_date}\n\n**📊 文章数**: {item_count} 篇\n\n---",
+        "content": f"**📅 日期**: {digest_date}  |  **📊 文章数**: {item_count} 篇\n\n---",
     })
 
     elements.append({

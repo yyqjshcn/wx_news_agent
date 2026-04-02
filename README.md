@@ -115,4 +115,8 @@ embodied-news-agent/
 
 ## 许可证
 
-私有
+MIT
+
+## 鸣谢
+
+- [wechat-download-api](https://github.com/tmwks/wechat-download-api) — 微信公众号文章采集适配器

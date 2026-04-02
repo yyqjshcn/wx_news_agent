@@ -20,7 +20,7 @@ async def seed():
     async with async_session() as db:
         workflows = [
             {
-                "workflow_name": "Daily Ingest",
+                "workflow_name": "每日采集",
                 "workflow_type": WorkflowType.DAILY_INGEST,
                 "cron_expression": "0 8 * * *",
                 "timezone": "Asia/Shanghai",
@@ -28,7 +28,7 @@ async def seed():
                 "config_json": {"batch_size": 50},
             },
             {
-                "workflow_name": "Classify Pending Articles",
+                "workflow_name": "文章分类",
                 "workflow_type": WorkflowType.CLASSIFY_PENDING,
                 "cron_expression": "*/30 * * * *",
                 "timezone": "Asia/Shanghai",
@@ -36,7 +36,7 @@ async def seed():
                 "config_json": {},
             },
             {
-                "workflow_name": "Generate Daily Digest",
+                "workflow_name": "生成摘要",
                 "workflow_type": WorkflowType.GENERATE_DIGEST,
                 "cron_expression": "0 20 * * *",
                 "timezone": "Asia/Shanghai",
@@ -44,7 +44,7 @@ async def seed():
                 "config_json": {},
             },
             {
-                "workflow_name": "Login Health Check",
+                "workflow_name": "登录检查",
                 "workflow_type": WorkflowType.LOGIN_HEALTH_CHECK,
                 "cron_expression": "0 */2 * * *",
                 "timezone": "Asia/Shanghai",

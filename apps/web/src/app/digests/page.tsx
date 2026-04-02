@@ -5,14 +5,14 @@ import { api } from "@/lib/api";
 import { useState } from "react";
 import {
   FileText, Download, Send, RefreshCw, Settings, Eye, Code,
-  Plus, Trash2, Edit2, CheckCircle, XCircle, Loader2,
+  Plus, Trash2, Edit2, CheckCircle, XCircle, Loader2, Mail,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 export default function DigestsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [showSettings, setShowSettings] = useState(false);
+  const [showSettings, setShowSettings] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"rendered" | "raw">("rendered");
   const queryClient = useQueryClient();
 
@@ -24,6 +24,11 @@ export default function DigestsPage() {
   const { data: webhooks } = useQuery({
     queryKey: ["feishu-webhooks"],
     queryFn: () => api.get("/api/feishu-webhooks"),
+  });
+
+  const { data: emailConfigs } = useQuery({
+    queryKey: ["email-configs"],
+    queryFn: () => api.get("/api/email-configs"),
   });
 
   const { data: selectedDigest } = useQuery({
@@ -55,17 +60,40 @@ export default function DigestsPage() {
     },
   });
 
+  const sendToEmailMutation = useMutation({
+    mutationFn: ({ configId, digestId }: { configId: string; digestId: string }) =>
+      api.post("/api/email-configs/send-digest", { config_id: configId, digest_id: digestId }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["digests"] });
+      alert("已发送邮件！");
+    },
+    onError: (error: Error) => {
+      alert(`发送失败: ${error.message}`);
+    },
+  });
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold">每日摘要</h1>
         <div className="flex gap-2">
           <button
-            onClick={() => setShowSettings(!showSettings)}
-            className="flex items-center gap-2 px-4 py-2 border rounded-md text-sm hover:bg-gray-50"
+            onClick={() => setShowSettings(showSettings === "feishu" ? null : "feishu")}
+            className={`flex items-center gap-2 px-4 py-2 border rounded-md text-sm ${
+              showSettings === "feishu" ? "bg-gray-100" : "hover:bg-gray-50"
+            }`}
           >
             <Settings size={16} />
             飞书设置
+          </button>
+          <button
+            onClick={() => setShowSettings(showSettings === "email" ? null : "email")}
+            className={`flex items-center gap-2 px-4 py-2 border rounded-md text-sm ${
+              showSettings === "email" ? "bg-gray-100" : "hover:bg-gray-50"
+            }`}
+          >
+            <Mail size={16} />
+            邮件设置
           </button>
           <button
             onClick={() => generateMutation.mutate()}
@@ -81,7 +109,8 @@ export default function DigestsPage() {
         </div>
       </div>
 
-      {showSettings && <FeishuSettings webhooks={webhooks} />}
+      {showSettings === "feishu" && <FeishuSettings webhooks={webhooks} />}
+      {showSettings === "email" && <EmailSettings configs={emailConfigs} />}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-1">
@@ -186,6 +215,30 @@ export default function DigestsPage() {
                           >
                             <Send size={14} />
                             {w.name}
+                          </button>
+                        ))}
+                    </div>
+                  )}
+
+                  {emailConfigs?.filter((c: any) => c.enabled).length > 0 && (
+                    <div className="flex gap-1">
+                      {emailConfigs
+                        ?.filter((c: any) => c.enabled)
+                        .map((c: any) => (
+                          <button
+                            key={c.id}
+                            onClick={() =>
+                              sendToEmailMutation.mutate({
+                                configId: c.id,
+                                digestId: selectedDigest.id,
+                              })
+                            }
+                            disabled={sendToEmailMutation.isPending}
+                            className="flex items-center gap-1 px-3 py-1.5 bg-gray-700 text-white rounded-md text-sm hover:bg-gray-600 disabled:opacity-50"
+                            title={`发送邮件: ${c.name}`}
+                          >
+                            <Mail size={14} />
+                            {c.name}
                           </button>
                         ))}
                     </div>
@@ -436,6 +489,290 @@ function FeishuSettings({ webhooks }: { webhooks?: any[] }) {
         {webhooks?.length === 0 && (
           <div className="text-center py-8 text-gray-400 text-sm">
             尚未配置飞书机器人。点击"添加机器人"开始配置。
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function EmailSettings({ configs }: { configs?: any[] }) {
+  const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState({
+    name: "",
+    smtp_host: "",
+    smtp_port: 587,
+    use_tls: true,
+    sender_email: "",
+    sender_name: "每日摘要",
+    sender_password: "",
+    recipients: "",
+    enabled: true,
+    send_on_digest_generated: false,
+  });
+  const queryClient = useQueryClient();
+
+  const createMutation = useMutation({
+    mutationFn: (data: any) => api.post("/api/email-configs", data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["email-configs"] });
+      setShowForm(false);
+      resetForm();
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: any }) =>
+      api.patch(`/api/email-configs/${id}`, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["email-configs"] });
+      setEditingId(null);
+      setShowForm(false);
+      resetForm();
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => api.delete(`/api/email-configs/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["email-configs"] });
+    },
+  });
+
+  const toggleMutation = useMutation({
+    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
+      api.patch(`/api/email-configs/${id}`, { enabled }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["email-configs"] });
+    },
+  });
+
+  const resetForm = () =>
+    setForm({
+      name: "",
+      smtp_host: "",
+      smtp_port: 587,
+      use_tls: true,
+      sender_email: "",
+      sender_name: "每日摘要",
+      sender_password: "",
+      recipients: "",
+      enabled: true,
+      send_on_digest_generated: false,
+    });
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const payload = {
+      ...form,
+      recipients_json: form.recipients.split(",").map((r: string) => r.trim()).filter(Boolean),
+    };
+    if (editingId) {
+      updateMutation.mutate({ id: editingId, data: payload });
+    } else {
+      createMutation.mutate(payload);
+    }
+  };
+
+  const startEdit = (c: any) => {
+    setEditingId(c.id);
+    setForm({
+      name: c.name,
+      smtp_host: c.smtp_host,
+      smtp_port: c.smtp_port,
+      use_tls: c.use_tls,
+      sender_email: c.sender_email,
+      sender_name: c.sender_name || "每日摘要",
+      sender_password: "",
+      recipients: (c.recipients_json || []).join(", "),
+      enabled: c.enabled,
+      send_on_digest_generated: c.send_on_digest_generated ?? false,
+    });
+    setShowForm(true);
+  };
+
+  return (
+    <div className="bg-white rounded-lg border p-6 mb-6 shadow-sm">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-lg font-semibold">邮件发送配置</h2>
+        <button
+          onClick={() => {
+            resetForm();
+            setEditingId(null);
+            setShowForm(!showForm);
+          }}
+          className="flex items-center gap-2 px-3 py-1.5 bg-gray-900 text-white rounded-md text-sm hover:bg-gray-800"
+        >
+          <Plus size={14} />
+          {showForm ? "取消" : "添加配置"}
+        </button>
+      </div>
+
+      {showForm && (
+        <form onSubmit={handleSubmit} className="space-y-4 mb-6 p-4 bg-gray-50 rounded-lg">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">名称 *</label>
+              <input
+                type="text"
+                required
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                className="w-full px-3 py-2 border rounded-md text-sm"
+                placeholder="例如: 工作邮箱"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">发件人邮箱 *</label>
+              <input
+                type="email"
+                required
+                value={form.sender_email}
+                onChange={(e) => setForm({ ...form, sender_email: e.target.value })}
+                className="w-full px-3 py-2 border rounded-md text-sm"
+                placeholder="you@example.com"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">SMTP 服务器 *</label>
+              <input
+                type="text"
+                required
+                value={form.smtp_host}
+                onChange={(e) => setForm({ ...form, smtp_host: e.target.value })}
+                className="w-full px-3 py-2 border rounded-md text-sm font-mono"
+                placeholder="smtp.example.com"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">SMTP 端口</label>
+              <input
+                type="number"
+                value={form.smtp_port}
+                onChange={(e) => setForm({ ...form, smtp_port: parseInt(e.target.value) })}
+                className="w-full px-3 py-2 border rounded-md text-sm"
+                placeholder="587"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">邮箱密码/授权码 *</label>
+              <input
+                type="password"
+                required
+                value={form.sender_password}
+                onChange={(e) => setForm({ ...form, sender_password: e.target.value })}
+                className="w-full px-3 py-2 border rounded-md text-sm"
+                placeholder={editingId ? "留空则不修改密码" : "邮箱密码或授权码"}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">发件人名称</label>
+              <input
+                type="text"
+                value={form.sender_name}
+                onChange={(e) => setForm({ ...form, sender_name: e.target.value })}
+                className="w-full px-3 py-2 border rounded-md text-sm"
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-sm font-medium mb-1">收件人邮箱 *</label>
+              <input
+                type="text"
+                required
+                value={form.recipients}
+                onChange={(e) => setForm({ ...form, recipients: e.target.value })}
+                className="w-full px-3 py-2 border rounded-md text-sm font-mono"
+                placeholder="a@example.com, b@example.com"
+              />
+              <p className="text-xs text-gray-400 mt-1">多个邮箱用逗号分隔</p>
+            </div>
+            <div className="flex items-center gap-6">
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={form.use_tls}
+                  onChange={(e) => setForm({ ...form, use_tls: e.target.checked })}
+                />
+                使用 TLS
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={form.send_on_digest_generated}
+                  onChange={(e) =>
+                    setForm({ ...form, send_on_digest_generated: e.target.checked })
+                  }
+                />
+                生成后自动发送
+              </label>
+            </div>
+          </div>
+          <button
+            type="submit"
+            disabled={createMutation.isPending || updateMutation.isPending}
+            className="px-4 py-2 bg-gray-900 text-white rounded-md text-sm hover:bg-gray-800 disabled:opacity-50"
+          >
+            {editingId ? "更新" : "创建"}
+          </button>
+        </form>
+      )}
+
+      <div className="space-y-2">
+        {configs?.map((c: any) => (
+          <div
+            key={c.id}
+            className="flex items-center justify-between p-4 border rounded-lg hover:bg-gray-50"
+          >
+            <div className="flex-1">
+              <div className="flex items-center gap-2">
+                <span className="font-medium">{c.name}</span>
+                {c.enabled ? (
+                  <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded-full text-xs">
+                    已启用
+                  </span>
+                ) : (
+                  <span className="px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full text-xs">
+                    已禁用
+                  </span>
+                )}
+              </div>
+              <div className="text-xs text-gray-400 mt-1">
+                {c.sender_email} → {c.smtp_host}:{c.smtp_port}
+              </div>
+              <div className="text-xs text-gray-400 mt-1">
+                收件人: {(c.recipients_json || []).join(", ")}
+                {c.send_on_digest_generated ? " · 自动生成后发送" : ""}
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => toggleMutation.mutate({ id: c.id, enabled: !c.enabled })}
+                className="p-1.5 text-gray-400 hover:text-gray-700"
+                title={c.enabled ? "禁用" : "启用"}
+              >
+                {c.enabled ? <CheckCircle size={16} /> : <XCircle size={16} />}
+              </button>
+              <button
+                onClick={() => startEdit(c)}
+                className="p-1.5 text-gray-400 hover:text-gray-700"
+                title="编辑"
+              >
+                <Edit2 size={14} />
+              </button>
+              <button
+                onClick={() => deleteMutation.mutate(c.id)}
+                className="p-1.5 text-gray-400 hover:text-red-600"
+                title="删除"
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
+          </div>
+        ))}
+        {configs?.length === 0 && (
+          <div className="text-center py-8 text-gray-400 text-sm">
+            尚未配置邮件发送。点击"添加配置"开始配置。
           </div>
         )}
       </div>
