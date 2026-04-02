@@ -1,6 +1,14 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
+
+
+def ensure_utc(v: datetime | None) -> datetime | None:
+    if v is None:
+        return None
+    if v.tzinfo is None:
+        return v.replace(tzinfo=timezone.utc)
+    return v
 
 
 class WorkflowBase(BaseModel):
@@ -35,6 +43,11 @@ class WorkflowResponse(WorkflowBase):
     class Config:
         from_attributes = True
 
+    @field_validator("last_run_at", "created_at", "updated_at", mode="before")
+    @classmethod
+    def make_utc(cls, v):
+        return ensure_utc(v)
+
 
 class WorkflowRunResponse(BaseModel):
     id: str
@@ -50,3 +63,8 @@ class WorkflowRunResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+    @field_validator("started_at", "finished_at", "created_at", mode="before")
+    @classmethod
+    def make_utc(cls, v):
+        return ensure_utc(v)

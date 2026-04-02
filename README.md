@@ -202,4 +202,4 @@ MIT
 
 ## 鸣谢
 
-- [wechat-download-api](https://github.com/tmwks/wechat-download-api) — 微信公众号文章采集适配器
+- [wechat-download-api](https://github.com/tmwgsicp/wechat-download-api) — 微信公众号文章采集适配器

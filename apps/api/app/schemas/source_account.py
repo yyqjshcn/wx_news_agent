@@ -1,6 +1,7 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, field_validator
 from typing import Optional
 from datetime import datetime
+from app.schemas.utils import ensure_utc
 
 
 class SourceAccountBase(BaseModel):
@@ -36,6 +37,11 @@ class SourceAccountResponse(SourceAccountBase):
 
     class Config:
         from_attributes = True
+
+    @field_validator("last_checked_at", "last_success_at", "created_at", "updated_at", mode="before")
+    @classmethod
+    def make_utc(cls, v):
+        return ensure_utc(v)
 
 
 class SourceAccountResolveRequest(BaseModel):

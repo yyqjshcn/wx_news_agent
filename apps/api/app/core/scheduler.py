@@ -220,12 +220,193 @@ async def do_daily_ingest(workflow_id: str) -> dict:
 
 
 async def do_classify_articles(workflow_id: str) -> dict:
+    session = async_session()
+    try:
+        result = await session.execute(
+            select(RawArticle).where(
+                RawArticle.status == "new",
+            ).order_by(RawArticle.created_at.asc()).limit(20)
+        )
+        articles = result.scalars().all()
+
+        if not articles:
+            return {
+                "workflow_id": workflow_id,
+                "classified_count": 0,
+                "message": "No new articles to classify",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+
+        result = await session.execute(
+            select(LlmProvider).where(
+                LlmProvider.enabled == True,
+                LlmProvider.is_default_for_extraction == True,
+            )
+        )
+        provider = result.scalar_one_or_none()
+
+        if not provider:
+            result = await session.execute(
+                select(LlmProvider).where(LlmProvider.enabled == True)
+            )
+            provider = result.scalar_one_or_none()
+
+        classified_count = 0
+        errors = []
+
+        # Process articles concurrently (max 3 at a time to avoid rate limits)
+        semaphore = asyncio.Semaphore(3)
+
+        async def classify_one(article):
+            nonlocal classified_count
+            async with semaphore:
+                try:
+                    classification = await _classify_article_async(article, provider)
+                    
+                    article.is_relevant = classification.get("is_relevant")
+                    article.relevance_score = classification.get("relevance_score")
+                    article.primary_event_type = classification.get("event_type")
+                    article.tags_json = classification.get("tags", [])
+                    article.companies_json = classification.get("companies", [])
+                    article.summary_short = classification.get("summary_short", "")
+                    article.summary_long = classification.get("summary_long", "")
+                    article.status = "classified"
+                    article.updated_at = datetime.now(timezone.utc)
+
+                    if provider:
+                        article.llm_provider_id = provider.id
+                        article.llm_model = provider.default_model
+
+                    return True, None
+                except Exception as e:
+                    return False, f"{article.title[:30]}: {e}"
+
+        tasks = [classify_one(article) for article in articles]
+        results = await asyncio.gather(*tasks)
+
+        for success, error in results:
+            if success:
+                classified_count += 1
+            else:
+                errors.append(error)
+
+        await session.commit()
+
+        return {
+            "workflow_id": workflow_id,
+            "classified_count": classified_count,
+            "total_new": len(articles),
+            "errors": errors[:5],
+            "used_llm": provider is not None,
+            "llm_provider": provider.name if provider else None,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    finally:
+        await session.close()
+
+
+async def _classify_article_async(article, provider) -> dict:
+    """Classify a single article using LLM (async)."""
+    import json
+    import httpx
+    from app.core.security import decrypt_api_key
+
+    if not provider:
+        return {
+            "is_relevant": None,
+            "relevance_score": 0,
+            "event_type": None,
+            "tags": [],
+            "companies": [],
+            "summary_short": article.plain_content[:200] if article.plain_content else "",
+            "summary_long": "",
+        }
+
+    api_key = decrypt_api_key(provider.api_key_encrypted)
+    url = provider.base_url.rstrip("/") + "/chat/completions"
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    if provider.extra_headers_json:
+        headers.update(provider.extra_headers_json)
+
+    content = article.plain_content or article.title or ""
+
+    prompt = (
+        f"请分析以下微信公众号文章，返回JSON格式的分类结果。\n\n"
+        f"文章标题: {article.title}\n"
+        f"来源公众号: {article.account_name}\n"
+        f"文章内容: {content[:2000]}\n\n"
+        "请返回以下JSON格式（不要其他内容）：\n"
+        "{\n"
+        '  "is_relevant": true/false,  // 是否与具身智能/AI/机器人领域相关\n'
+        '  "relevance_score": 1-10,    // 相关性评分\n'
+        '  "event_type": "string",     // 事件类型：融资/发布/合作/展会/研究/政策/其他\n'
+        '  "tags": ["tag1", "tag2"],   // 关键词标签，最多5个\n'
+        '  "companies": ["公司1"],     // 文中提到的公司名称，最多10个\n'
+        '  "summary_short": "一句话摘要",\n'
+        '  "summary_long": "详细摘要，3-5句话"\n'
+        "}"
+    )
+
+    payload = {
+        "model": provider.default_model,
+        "messages": [
+            {"role": "system", "content": "你是一个专业的科技文章分类助手。请严格按照要求的JSON格式返回结果，不要添加任何其他内容。"},
+            {"role": "user", "content": prompt},
+        ],
+        "max_tokens": 500,
+        "temperature": 0.1,
+    }
+
+    for attempt in range(provider.max_retries):
+        try:
+            async with httpx.AsyncClient(timeout=60) as client:
+                resp = await client.post(url, json=payload, headers=headers)
+                resp.raise_for_status()
+                data = resp.json()
+                content_str = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                
+                # Extract JSON from response
+                content_str = content_str.strip()
+                if content_str.startswith("```"):
+                    content_str = content_str.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+                
+                result = json.loads(content_str)
+                return {
+                    "is_relevant": result.get("is_relevant"),
+                    "relevance_score": result.get("relevance_score", 0),
+                    "event_type": result.get("event_type"),
+                    "tags": result.get("tags", [])[:5],
+                    "companies": result.get("companies", [])[:10],
+                    "summary_short": result.get("summary_short", ""),
+                    "summary_long": result.get("summary_long", ""),
+                }
+        except Exception as e:
+            if attempt == provider.max_retries - 1:
+                logger.error(f"LLM classification failed: {e}")
+                return {
+                    "is_relevant": None,
+                    "relevance_score": 0,
+                    "event_type": None,
+                    "tags": [],
+                    "companies": [],
+                    "summary_short": article.plain_content[:200] if article.plain_content else "",
+                    "summary_long": "",
+                }
+            import asyncio
+            await asyncio.sleep(2 ** attempt)
+
     return {
-        "workflow_id": workflow_id,
-        "classified_count": 0,
-        "is_relevant": False,
+        "is_relevant": None,
+        "relevance_score": 0,
         "event_type": None,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "tags": [],
+        "companies": [],
+        "summary_short": "",
+        "summary_long": "",
     }
 
 
