@@ -5,7 +5,6 @@ import { api } from "@/lib/api";
 import {
   BarChart3,
   FileText,
-  Zap,
   BookOpen,
   CheckCircle,
   AlertCircle,
@@ -16,6 +15,13 @@ export default function DashboardPage() {
   const { data: stats } = useQuery({
     queryKey: ["dashboard-stats"],
     queryFn: () => api.get("/api/dashboard/stats"),
+    refetchInterval: 30000,
+  });
+
+  const { data: sysStatus } = useQuery({
+    queryKey: ["system-status"],
+    queryFn: () => api.get("/api/system/status"),
+    refetchInterval: 30000,
   });
 
   const cards = [
@@ -25,13 +31,6 @@ export default function DashboardPage() {
       icon: FileText,
       color: "text-blue-600",
       bg: "bg-blue-50",
-    },
-    {
-      label: "今日事件",
-      value: stats?.today_events ?? 0,
-      icon: Zap,
-      color: "text-amber-600",
-      bg: "bg-amber-50",
     },
     {
       label: "文章总数",
@@ -53,7 +52,7 @@ export default function DashboardPage() {
     <div>
       <h1 className="text-2xl font-bold mb-6">仪表盘</h1>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
         {cards.map((card) => {
           const Icon = card.icon;
           return (
@@ -80,18 +79,18 @@ export default function DashboardPage() {
         <div className="space-y-3">
           <StatusItem
             label="微信登录"
-            status="unknown"
-            message="尚未配置"
+            status={sysStatus?.wechat?.status ?? "unknown"}
+            message={sysStatus?.wechat?.message ?? "加载中..."}
           />
           <StatusItem
-            label="默认模型"
-            status="info"
-            message="请在模型配置页面设置"
+            label="模型提供商"
+            status={sysStatus?.llm?.status ?? "unknown"}
+            message={sysStatus?.llm?.message ?? "加载中..."}
           />
           <StatusItem
             label="定时任务"
-            status="info"
-            message="Celery Beat 运行中"
+            status={sysStatus?.scheduler?.status ?? "unknown"}
+            message={sysStatus?.scheduler?.message ?? "加载中..."}
           />
         </div>
       </div>

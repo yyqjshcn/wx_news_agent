@@ -13,6 +13,12 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
     return stats
 
 
+@router.get("/system/status")
+async def get_system_status(db: AsyncSession = Depends(get_db)):
+    status = await article_service.get_system_status(db)
+    return status
+
+
 @router.get("/logs")
 async def get_logs(
     skip: int = 0,

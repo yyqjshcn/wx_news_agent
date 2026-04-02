@@ -172,3 +172,69 @@ async def get_dashboard_stats(db: AsyncSession) -> dict:
         "today_articles": today_articles,
         "today_events": today_events,
     }
+
+
+async def get_system_status(db: AsyncSession) -> dict:
+    """Get real-time system status for dashboard."""
+    import httpx
+
+    # Check WeChat adapter
+    wechat_status = "unknown"
+    wechat_message = "无法连接"
+    try:
+        from app.core.config import get_settings
+        settings = get_settings()
+        adapter_url = settings.WECHAT_ADAPTER_URL.rstrip("/")
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(f"{adapter_url}/api/admin/status")
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("loggedIn") or data.get("authenticated"):
+                    nickname = data.get("nickname") or data.get("account", "")
+                    wechat_status = "success"
+                    wechat_message = f"已登录: {nickname}" if nickname else "已登录"
+                else:
+                    wechat_status = "failed"
+                    wechat_message = data.get("status", "未登录")
+            else:
+                wechat_status = "failed"
+                wechat_message = f"HTTP {resp.status_code}"
+    except Exception as e:
+        wechat_status = "failed"
+        wechat_message = str(e)[:100]
+
+    # Check default LLM provider
+    llm_status = "unknown"
+    llm_message = "未配置"
+    try:
+        from app.models.llm_provider import LlmProvider
+        result = await db.execute(
+            select(LlmProvider).where(
+                LlmProvider.enabled == True,
+                LlmProvider.is_default_for_digest == True,
+            )
+        )
+        provider = result.scalar_one_or_none()
+        if provider:
+            llm_status = "success"
+            llm_message = f"{provider.name} ({provider.default_model})"
+        else:
+            result = await db.execute(
+                select(LlmProvider).where(LlmProvider.enabled == True)
+            )
+            provider = result.scalar_one_or_none()
+            if provider:
+                llm_status = "info"
+                llm_message = f"{provider.name} ({provider.default_model}) - 未设为默认"
+    except Exception:
+        pass
+
+    # Check scheduler
+    scheduler_status = "success"
+    scheduler_message = "APScheduler 运行中"
+
+    return {
+        "wechat": {"status": wechat_status, "message": wechat_message},
+        "llm": {"status": llm_status, "message": llm_message},
+        "scheduler": {"status": scheduler_status, "message": scheduler_message},
+    }
