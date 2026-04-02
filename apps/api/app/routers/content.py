@@ -14,19 +14,37 @@ router = APIRouter(prefix="/api", tags=["articles", "events", "digests"])
 @router.get("/articles", response_model=list[ArticleResponse])
 async def list_articles(
     skip: int = 0,
-    limit: int = 50,
+    limit: int = 30,
     account_name: Optional[str] = None,
     status: Optional[str] = None,
     is_relevant: Optional[bool] = None,
     event_type: Optional[str] = None,
+    source_type: Optional[str] = None,
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
     db: AsyncSession = Depends(get_db),
 ):
     articles = await article_service.get_articles(
-        db, skip, limit, account_name, status, is_relevant, event_type, start_date, end_date
+        db, skip, limit, account_name, status, is_relevant, event_type, source_type, start_date, end_date
     )
     return articles
+
+
+@router.get("/articles/count")
+async def count_articles(
+    account_name: Optional[str] = None,
+    status: Optional[str] = None,
+    is_relevant: Optional[bool] = None,
+    event_type: Optional[str] = None,
+    source_type: Optional[str] = None,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    count = await article_service.count_articles(
+        db, account_name, status, is_relevant, event_type, source_type, start_date, end_date
+    )
+    return {"count": count}
 
 
 @router.get("/articles/{article_id}", response_model=ArticleResponse)

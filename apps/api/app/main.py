@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import providers, source_accounts, keywords, workflows, content, wechat, system, feishu_webhooks, email_configs
+from app.routers import providers, source_accounts, keywords, workflows, content, wechat, system, feishu_webhooks, email_configs, rss_feeds, notification_channels
 from app.db.database import engine
 from app.db.base import Base
 from app.core.scheduler import start_scheduler, stop_scheduler
@@ -42,6 +42,8 @@ app.include_router(wechat.router)
 app.include_router(system.router)
 app.include_router(feishu_webhooks.router)
 app.include_router(email_configs.router)
+app.include_router(rss_feeds.router)
+app.include_router(notification_channels.router)
 
 
 @app.get("/api/health")

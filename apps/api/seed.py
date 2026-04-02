@@ -51,6 +51,14 @@ async def seed():
                 "enabled": True,
                 "config_json": {},
             },
+            {
+                "workflow_name": "RSS采集",
+                "workflow_type": WorkflowType.RSS_INGEST,
+                "cron_expression": "0 * * * *",
+                "timezone": "Asia/Shanghai",
+                "enabled": True,
+                "config_json": {},
+            },
         ]
 
         for w in workflows:

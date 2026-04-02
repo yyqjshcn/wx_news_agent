@@ -22,7 +22,9 @@ from app.models.keyword import Keyword
 from app.models.article import RawArticle
 from app.models.digest import DailyDigest
 from app.models.llm_provider import LlmProvider
+from app.models.rss_feed import RssFeed
 from app.core.security import decrypt_api_key
+from app.services.rss_service import parse_feed
 
 logger = logging.getLogger(__name__)
 
@@ -31,10 +33,6 @@ WECHAT_ADAPTER_URL = "http://wechat-adapter:5000"
 
 def _get_settings():
     return get_settings()
-
-
-async def _get_session() -> AsyncSession:
-    return async_session()
 
 
 async def _mark_run_started(run_id: str) -> str:
@@ -184,6 +182,7 @@ async def do_daily_ingest(workflow_id: str) -> dict:
                         article_url=link,
                         title=title,
                         account_name=account.account_name,
+                        source_type="wechat",
                         fakeid=account.fakeid,
                         publish_time=publish_time,
                         author=author or None,
@@ -408,6 +407,114 @@ async def _classify_article_async(article, provider) -> dict:
         "summary_short": "",
         "summary_long": "",
     }
+
+
+async def do_rss_ingest(workflow_id: str) -> dict:
+    """Fetch articles from RSS feeds and store them."""
+    session = async_session()
+    try:
+        result = await session.execute(
+            select(RssFeed).where(
+                RssFeed.enabled == True,
+            )
+        )
+        feeds = result.scalars().all()
+
+        if not feeds:
+            return {
+                "workflow_id": workflow_id,
+                "status": "completed",
+                "articles_fetched": 0,
+                "articles_stored": 0,
+                "message": "No enabled RSS feeds",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+
+        result = await session.execute(
+            select(Keyword).where(Keyword.enabled == True)
+        )
+        keywords = result.scalars().all()
+        keyword_texts = [k.keyword.lower() for k in keywords]
+
+        total_fetched = 0
+        total_stored = 0
+        total_matched = 0
+        errors = []
+
+        for feed in feeds:
+            try:
+                feed_result = parse_feed(feed.feed_url)
+                if not feed_result["success"]:
+                    errors.append(f"{feed.name}: {feed_result.get('error')}")
+                    feed.last_checked_at = datetime.now(timezone.utc)
+                    await session.commit()
+                    continue
+
+                entries = feed_result.get("entries", [])
+                total_fetched += len(entries)
+
+                for entry in entries:
+                    link = entry.get("link", "")
+                    if not link:
+                        continue
+
+                    content_text = (entry.get("title", "") + " " + entry.get("content", "")).lower()
+                    matched = not keyword_texts or any(
+                        kw in content_text for kw in keyword_texts
+                    )
+                    if matched:
+                        total_matched += 1
+
+                    content_hash = hashlib.sha256(
+                        (entry.get("title", "") + link).encode()
+                    ).hexdigest()
+
+                    existing_result = await session.execute(
+                        select(RawArticle).where(RawArticle.article_url == link)
+                    )
+                    existing = existing_result.scalar_one_or_none()
+                    if existing:
+                        continue
+
+                    new_article = RawArticle(
+                        id=str(hashlib.md5(link.encode()).hexdigest()),
+                        article_url=link,
+                        title=entry.get("title", "Untitled"),
+                        account_name=feed.name,
+                        source_type="rss",
+                        fakeid=None,
+                        publish_time=entry.get("published"),
+                        author=entry.get("author") or None,
+                        plain_content=entry.get("content", ""),
+                        content_hash=content_hash,
+                        status="new",
+                        is_relevant=matched if keyword_texts else None,
+                    )
+                    session.add(new_article)
+                    total_stored += 1
+
+                feed.last_checked_at = datetime.now(timezone.utc)
+                feed.last_success_at = datetime.now(timezone.utc)
+                await session.commit()
+
+            except Exception as e:
+                logger.error(f"Failed to fetch RSS feed {feed.name}: {e}")
+                errors.append(f"{feed.name}: {e}")
+                feed.last_checked_at = datetime.now(timezone.utc)
+                await session.commit()
+
+        return {
+            "workflow_id": workflow_id,
+            "status": "completed",
+            "articles_fetched": total_fetched,
+            "articles_stored": total_stored,
+            "articles_matched_keyword": total_matched,
+            "sources_processed": len(feeds),
+            "errors": errors[:5],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    finally:
+        await session.close()
 
 
 async def do_login_health_check(workflow_id: str) -> dict:
@@ -655,12 +762,14 @@ TASK_MAP = {
     WorkflowType.GENERATE_DIGEST: do_generate_digest,
     WorkflowType.RETRY_FAILED: do_daily_ingest,
     WorkflowType.LOGIN_HEALTH_CHECK: do_login_health_check,
+    WorkflowType.RSS_INGEST: do_rss_ingest,
 }
 
 
 async def run_workflow_task(workflow_id: str, trigger_type: TriggerType = TriggerType.SCHEDULED):
     """Execute a workflow task by ID."""
-    async with _get_session() as session:
+    session = async_session()
+    try:
         workflow = await session.get(Workflow, workflow_id)
         if not workflow:
             logger.error(f"Workflow {workflow_id} not found")
@@ -671,9 +780,8 @@ async def run_workflow_task(workflow_id: str, trigger_type: TriggerType = Trigge
             logger.error(f"No task mapped for workflow type: {workflow.workflow_type}")
             return
 
-    run_id = str(uuid.uuid4())
+        run_id = str(uuid.uuid4())
 
-    async with _get_session() as session:
         run = WorkflowRun(
             id=run_id,
             workflow_id=workflow_id,
@@ -682,6 +790,8 @@ async def run_workflow_task(workflow_id: str, trigger_type: TriggerType = Trigge
         )
         session.add(run)
         await session.commit()
+    finally:
+        await session.close()
 
     try:
         await _execute_workflow(run_id, workflow.workflow_type.value, task_fn)

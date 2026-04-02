@@ -9,6 +9,7 @@ class ArticleResponse(BaseModel):
     article_url: str
     title: str
     account_name: str
+    source_type: str = "wechat"
     publish_time: Optional[datetime] = None
     author: Optional[str] = None
     status: str

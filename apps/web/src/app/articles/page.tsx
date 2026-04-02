@@ -3,7 +3,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useState } from "react";
-import { Filter, ExternalLink } from "lucide-react";
+import { Filter, ExternalLink, Rss, MessageSquare, ChevronLeft, ChevronRight } from "lucide-react";
+
+const PAGE_SIZE = 30;
 
 export default function ArticlesPage() {
   const [filters, setFilters] = useState({
@@ -11,19 +13,44 @@ export default function ArticlesPage() {
     status: "",
     is_relevant: "",
     event_type: "",
+    source_type: "",
   });
+  const [page, setPage] = useState(0);
 
   const { data: articles, isLoading } = useQuery({
-    queryKey: ["articles", filters],
+    queryKey: ["articles", filters, page],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      params.set("skip", String(page * PAGE_SIZE));
+      params.set("limit", String(PAGE_SIZE));
+      if (filters.account_name) params.set("account_name", filters.account_name);
+      if (filters.status) params.set("status", filters.status);
+      if (filters.is_relevant) params.set("is_relevant", filters.is_relevant);
+      if (filters.event_type) params.set("event_type", filters.event_type);
+      if (filters.source_type) params.set("source_type", filters.source_type);
+      return api.get(`/api/articles?${params}`);
+    },
+  });
+
+  const { data: totalCount } = useQuery({
+    queryKey: ["articles-count", filters],
     queryFn: () => {
       const params = new URLSearchParams();
       if (filters.account_name) params.set("account_name", filters.account_name);
       if (filters.status) params.set("status", filters.status);
       if (filters.is_relevant) params.set("is_relevant", filters.is_relevant);
       if (filters.event_type) params.set("event_type", filters.event_type);
-      return api.get(`/api/articles?${params}`);
+      if (filters.source_type) params.set("source_type", filters.source_type);
+      return api.get(`/api/articles/count?${params}`).then((r: any) => r.count);
     },
   });
+
+  const totalPages = Math.ceil((totalCount || 0) / PAGE_SIZE);
+
+  const handleFilterChange = (newFilters: typeof filters) => {
+    setFilters(newFilters);
+    setPage(0);
+  };
 
   return (
     <div>
@@ -34,17 +61,26 @@ export default function ArticlesPage() {
           <Filter size={16} className="text-gray-400" />
           <span className="text-sm font-medium">筛选条件</span>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
           <input
             type="text"
-            placeholder="公众号名称"
+            placeholder="来源名称"
             value={filters.account_name}
-            onChange={(e) => setFilters({ ...filters, account_name: e.target.value })}
+            onChange={(e) => handleFilterChange({ ...filters, account_name: e.target.value })}
             className="px-3 py-2 border rounded-md text-sm"
           />
           <select
+            value={filters.source_type}
+            onChange={(e) => handleFilterChange({ ...filters, source_type: e.target.value })}
+            className="px-3 py-2 border rounded-md text-sm"
+          >
+            <option value="">全部来源</option>
+            <option value="wechat">微信公众号</option>
+            <option value="rss">RSS 源</option>
+          </select>
+          <select
             value={filters.status}
-            onChange={(e) => setFilters({ ...filters, status: e.target.value })}
+            onChange={(e) => handleFilterChange({ ...filters, status: e.target.value })}
             className="px-3 py-2 border rounded-md text-sm"
           >
             <option value="">全部状态</option>
@@ -54,7 +90,7 @@ export default function ArticlesPage() {
           </select>
           <select
             value={filters.is_relevant}
-            onChange={(e) => setFilters({ ...filters, is_relevant: e.target.value })}
+            onChange={(e) => handleFilterChange({ ...filters, is_relevant: e.target.value })}
             className="px-3 py-2 border rounded-md text-sm"
           >
             <option value="">全部相关性</option>
@@ -65,7 +101,7 @@ export default function ArticlesPage() {
             type="text"
             placeholder="事件类型"
             value={filters.event_type}
-            onChange={(e) => setFilters({ ...filters, event_type: e.target.value })}
+            onChange={(e) => handleFilterChange({ ...filters, event_type: e.target.value })}
             className="px-3 py-2 border rounded-md text-sm"
           />
         </div>
@@ -77,6 +113,7 @@ export default function ArticlesPage() {
             <tr>
               <th className="text-left px-4 py-3 font-medium text-gray-500">标题</th>
               <th className="text-left px-4 py-3 font-medium text-gray-500">来源</th>
+              <th className="text-left px-4 py-3 font-medium text-gray-500">类型</th>
               <th className="text-left px-4 py-3 font-medium text-gray-500">相关性</th>
               <th className="text-left px-4 py-3 font-medium text-gray-500">事件</th>
               <th className="text-left px-4 py-3 font-medium text-gray-500">日期</th>
@@ -85,7 +122,7 @@ export default function ArticlesPage() {
           <tbody className="divide-y">
             {isLoading && (
               <tr>
-                <td colSpan={5} className="px-4 py-8 text-center text-gray-400">
+                <td colSpan={6} className="px-4 py-8 text-center text-gray-400">
                   加载中...
                 </td>
               </tr>
@@ -104,6 +141,19 @@ export default function ArticlesPage() {
                   </a>
                 </td>
                 <td className="px-4 py-3 text-gray-600">{a.account_name}</td>
+                <td className="px-4 py-3">
+                  {a.source_type === "rss" ? (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-purple-100 text-purple-700 rounded-full text-xs">
+                      <Rss size={10} />
+                      RSS
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-xs">
+                      <MessageSquare size={10} />
+                      微信
+                    </span>
+                  )}
+                </td>
                 <td className="px-4 py-3">
                   {a.is_relevant === true && (
                     <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded-full text-xs">
@@ -131,6 +181,33 @@ export default function ArticlesPage() {
             ))}
           </tbody>
         </table>
+
+        {totalCount !== undefined && totalCount > 0 && (
+          <div className="flex items-center justify-between px-4 py-3 border-t">
+            <span className="text-sm text-gray-500">
+              共 {totalCount} 条，第 {page + 1}/{totalPages || 1} 页
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                disabled={page === 0}
+                className="flex items-center gap-1 px-3 py-1.5 border rounded-md text-sm hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <ChevronLeft size={14} />
+                上一页
+              </button>
+              <button
+                onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                disabled={page >= totalPages - 1}
+                className="flex items-center gap-1 px-3 py-1.5 border rounded-md text-sm hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                下一页
+                <ChevronRight size={14} />
+              </button>
+            </div>
+          </div>
+        )}
+
         {articles?.length === 0 && !isLoading && (
           <div className="text-center py-12 text-gray-400">
             未找到文章。配置来源并运行工作流以开始采集。

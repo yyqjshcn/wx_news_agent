@@ -12,6 +12,7 @@ class RawArticle(Base):
     article_url = Column(String, nullable=False, unique=True)
     title = Column(String, nullable=False)
     account_name = Column(String, nullable=False)
+    source_type = Column(String, default="wechat")  # "wechat" or "rss"
     fakeid = Column(String, nullable=True)
     publish_time = Column(DateTime(timezone=True), nullable=True)
     author = Column(String, nullable=True)

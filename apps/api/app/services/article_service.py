@@ -13,11 +13,12 @@ from app.schemas.article import ArticleUpdate
 async def get_articles(
     db: AsyncSession,
     skip: int = 0,
-    limit: int = 50,
+    limit: int = 30,
     account_name: str | None = None,
     status: str | None = None,
     is_relevant: bool | None = None,
     event_type: str | None = None,
+    source_type: str | None = None,
     start_date: datetime | None = None,
     end_date: datetime | None = None,
 ) -> list[RawArticle]:
@@ -30,6 +31,8 @@ async def get_articles(
         query = query.where(RawArticle.is_relevant == is_relevant)
     if event_type:
         query = query.where(RawArticle.primary_event_type == event_type)
+    if source_type:
+        query = query.where(RawArticle.source_type == source_type)
     if start_date:
         query = query.where(RawArticle.publish_time >= start_date)
     if end_date:
@@ -37,6 +40,35 @@ async def get_articles(
     query = query.order_by(RawArticle.created_at.desc()).offset(skip).limit(limit)
     result = await db.execute(query)
     return result.scalars().all()
+
+
+async def count_articles(
+    db: AsyncSession,
+    account_name: str | None = None,
+    status: str | None = None,
+    is_relevant: bool | None = None,
+    event_type: str | None = None,
+    source_type: str | None = None,
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+) -> int:
+    query = select(func.count(RawArticle.id))
+    if account_name:
+        query = query.where(RawArticle.account_name == account_name)
+    if status:
+        query = query.where(RawArticle.status == status)
+    if is_relevant is not None:
+        query = query.where(RawArticle.is_relevant == is_relevant)
+    if event_type:
+        query = query.where(RawArticle.primary_event_type == event_type)
+    if source_type:
+        query = query.where(RawArticle.source_type == source_type)
+    if start_date:
+        query = query.where(RawArticle.publish_time >= start_date)
+    if end_date:
+        query = query.where(RawArticle.publish_time <= end_date)
+    result = await db.execute(query)
+    return result.scalar() or 0
 
 
 async def get_article(db: AsyncSession, article_id: str) -> RawArticle | None:

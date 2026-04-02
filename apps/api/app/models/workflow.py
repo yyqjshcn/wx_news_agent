@@ -13,6 +13,7 @@ class WorkflowType(str, enum.Enum):
     GENERATE_DIGEST = "generate_daily_digest"
     RETRY_FAILED = "retry_failed_jobs"
     LOGIN_HEALTH_CHECK = "login_health_check"
+    RSS_INGEST = "rss_ingest"
 
 
 class WorkflowRunStatus(str, enum.Enum):
