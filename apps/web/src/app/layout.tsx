@@ -6,8 +6,17 @@ import { Providers } from "./providers";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "微信新闻智能体",
+  title: {
+    default: "微信新闻智能体",
+    template: "%s | 微信新闻智能体",
+  },
   description: "本地微信智能简报系统",
+  icons: {
+    icon: [
+      { url: "/favicon.svg", type: "image/svg+xml" },
+    ],
+    apple: "/favicon.svg",
+  },
 };
 
 export default function RootLayout({
