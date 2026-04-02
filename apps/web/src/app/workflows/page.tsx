@@ -2,13 +2,15 @@
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { useState } from "react";
-import { Plus, Trash2, Edit2, Play, Clock } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { Plus, Trash2, Edit2, Play, Clock, Loader2, CheckCircle, XCircle } from "lucide-react";
 
 export default function WorkflowsPage() {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [viewingRuns, setViewingRuns] = useState<string | null>(null);
+  const [runningIds, setRunningIds] = useState<Set<string>>(new Set());
+  const pollRef = useRef<Record<string, ReturnType<typeof setInterval>>>({});
   const queryClient = useQueryClient();
 
   const { data: workflows } = useQuery({
@@ -68,14 +70,51 @@ export default function WorkflowsPage() {
 
   const runMutation = useMutation({
     mutationFn: (id: string) => api.post(`/api/workflows/${id}/run`),
-    onSuccess: () => {
+    onSuccess: (_, id) => {
+      setRunningIds((prev) => new Set(prev).add(id));
       queryClient.invalidateQueries({ queryKey: ["workflows"] });
       queryClient.invalidateQueries({ queryKey: ["workflow-runs"] });
+      startPolling(id);
     },
     onError: (error: Error) => {
       alert(`运行失败: ${error.message}`);
     },
   });
+
+  const startPolling = (workflowId: string) => {
+    if (pollRef.current[workflowId]) return;
+    pollRef.current[workflowId] = setInterval(async () => {
+      try {
+        const runsData = await api.get(`/api/workflows/${workflowId}/runs`);
+        const latest = runsData?.[0];
+        if (latest && latest.status !== "pending" && latest.status !== "running") {
+          clearInterval(pollRef.current[workflowId]);
+          delete pollRef.current[workflowId];
+          setRunningIds((prev) => {
+            const next = new Set(prev);
+            next.delete(workflowId);
+            return next;
+          });
+          queryClient.invalidateQueries({ queryKey: ["workflows"] });
+          queryClient.invalidateQueries({ queryKey: ["workflow-runs"] });
+        }
+      } catch {
+        clearInterval(pollRef.current[workflowId]);
+        delete pollRef.current[workflowId];
+        setRunningIds((prev) => {
+          const next = new Set(prev);
+          next.delete(workflowId);
+          return next;
+        });
+      }
+    }, 2000);
+  };
+
+  useEffect(() => {
+    return () => {
+      Object.values(pollRef.current).forEach(clearInterval);
+    };
+  }, []);
 
   const resetForm = () =>
     setForm({
@@ -305,28 +344,42 @@ export default function WorkflowsPage() {
                     {w.timezone}
                   </p>
                 </div>
-                {w.last_run_at && (
-                  <div className="mt-2 text-sm text-gray-500">
-                    上次运行: {new Date(w.last_run_at).toLocaleString()} -{" "}
-                    <span
-                      className={
-                        w.last_status === "success"
-                          ? "text-green-600"
-                          : "text-red-600"
-                      }
-                    >
-                      {w.last_status === "success" ? "成功" : "失败"}
-                    </span>
-                  </div>
-                )}
+                <div className="mt-2 text-sm min-h-[20px]">
+                  {runningIds.has(w.id) ? (
+                    <div className="flex items-center gap-2 text-blue-600">
+                      <Loader2 size={14} className="animate-spin" />
+                      <span>运行中...</span>
+                    </div>
+                  ) : w.last_run_at ? (
+                    <div className="text-gray-500">
+                      上次运行: {new Date(w.last_run_at).toLocaleString()} -{" "}
+                      <span
+                        className={
+                          w.last_status === "success"
+                            ? "text-green-600"
+                            : "text-red-600"
+                        }
+                      >
+                        {w.last_status === "success" ? "成功" : "失败"}
+                      </span>
+                    </div>
+                  ) : (
+                    <span className="text-gray-400">尚未运行</span>
+                  )}
+                </div>
               </div>
               <div className="flex items-center gap-2 ml-4">
                 <button
                   onClick={() => runMutation.mutate(w.id)}
-                  className="p-2 text-gray-500 hover:text-green-600"
+                  disabled={runMutation.isPending || runningIds.has(w.id)}
+                  className="p-2 text-gray-500 hover:text-green-600 disabled:opacity-40 disabled:cursor-not-allowed"
                   title="立即运行"
                 >
-                  <Play size={16} />
+                  {runningIds.has(w.id) ? (
+                    <Loader2 size={16} className="animate-spin text-blue-500" />
+                  ) : (
+                    <Play size={16} />
+                  )}
                 </button>
                 <button
                   onClick={() => setViewingRuns(w.id)}
