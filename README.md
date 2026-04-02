@@ -17,9 +17,12 @@
 
 ### 前置条件
 
-- 安装了 WSL 2 的 Windows（推荐 Ubuntu 22.04+）
-- 使用 WSL 2 后端的 Docker Desktop
-- 代码目录需位于 WSL 文件系统内（不要放在 `/mnt/c/...`）
+- Windows
+   - 安装了 WSL 2 的 Windows（推荐 Ubuntu 22.04+）
+   - 使用 WSL 2 后端的 Docker Desktop
+   - 代码目录需位于 WSL 文件系统内（不要放在 `/mnt/c/...`）
+- Linux
+   - 有 Docker + Docker Compose
 
 ### 1. 克隆与配置
 
