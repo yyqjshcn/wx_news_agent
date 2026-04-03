@@ -19,6 +19,7 @@ class ArticleResponse(BaseModel):
     tags_json: list = []
     companies_json: list = []
     summary_short: Optional[str] = None
+    summary_long: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

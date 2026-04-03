@@ -424,27 +424,48 @@ async def _classify_article_async(article, provider) -> dict:
         f"文章标题: {article.title}\n"
         f"来源公众号: {article.account_name}\n"
         f"文章内容: {content_for_llm}\n\n"
-        "请返回以下JSON格式（不要其他内容）：\n"
+        "请严格返回以下JSON对象，不要包含任何其他文字、markdown标记或代码块：\n"
         "{\n"
-        '  "is_relevant": true/false,  // 是否与具身智能/AI/机器人领域相关\n'
-        '  "relevance_score": 1-10,    // 相关性评分\n'
-        '  "event_type": "string",     // 事件类型：融资/发布/合作/展会/研究/政策/其他\n'
-        '  "tags": ["tag1", "tag2"],   // 关键词标签，最多5个\n'
-        '  "companies": ["公司1"],     // 文中提到的公司名称，最多10个\n'
+        '  "is_relevant": true,\n'
+        '  "relevance_score": 8,\n'
+        '  "event_type": "融资",\n'
+        '  "tags": ["tag1", "tag2"],\n'
+        '  "companies": ["公司1", "公司2"],\n'
         '  "summary_short": "一句话摘要",\n'
-        '  "summary_long": "详细摘要，3-5句话"\n'
-        "}"
+        '  "summary_long": "详细摘要，3到5句话"\n'
+        "}\n"
+        "注意：\n"
+        "1. is_relevant 判断标准：文章是否直接与以下主题相关：\n"
+        "   - 具身智能（Embodied AI）：机器人学习、物理世界交互、具身认知、具身大模型\n"
+        "   - 世界模型（World Models）：环境建模、物理仿真、空间理解、世界模型\n"
+        "   - 人形机器人、具身机器人、机器人基础模型\n"
+        "   - 不相关：纯软件AI（如LLM文本生成、图像生成）、通用AI新闻、非具身类机器人\n"
+        "2. 所有字符串值中的引号和反斜杠必须正确转义，不要使用中文引号或特殊标点。"
     )
 
     payload = {
         "model": provider.default_model,
         "messages": [
-            {"role": "system", "content": "你是一个专业的科技文章分类助手。请严格按照要求的JSON格式返回结果，不要添加任何其他内容。"},
+            {"role": "system", "content": "你是一个专业的科技文章分类助手，专注于识别具身智能和世界模型相关文章。请只返回合法的JSON对象，不要包含任何其他内容。"},
             {"role": "user", "content": prompt},
         ],
-        "max_tokens": 2000,
+        "max_tokens": 1500,
         "temperature": 0.1,
     }
+
+    def _try_repair_json(text: str) -> str:
+        """尝试修复常见的JSON格式问题。"""
+        import re
+        # 移除 markdown 代码块
+        text = re.sub(r'^```(?:json)?\s*', '', text)
+        text = re.sub(r'\s*```\s*$', '', text)
+        text = text.strip()
+        # 移除行尾注释（// 开头的注释）
+        text = re.sub(r'//.*$', '', text, flags=re.MULTILINE)
+        # 修复尾部多余的逗号
+        text = re.sub(r',\s*}', '}', text)
+        text = re.sub(r',\s*]', ']', text)
+        return text
 
     for attempt in range(provider.max_retries):
         try:
@@ -455,9 +476,7 @@ async def _classify_article_async(article, provider) -> dict:
                 content_str = data.get("choices", [{}])[0].get("message", {}).get("content", "")
                 
                 # Extract JSON from response
-                content_str = content_str.strip()
-                if content_str.startswith("```"):
-                    content_str = content_str.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+                content_str = _try_repair_json(content_str)
                 
                 result = json.loads(content_str)
                 return {
@@ -469,6 +488,21 @@ async def _classify_article_async(article, provider) -> dict:
                     "summary_short": result.get("summary_short", ""),
                     "summary_long": result.get("summary_long", ""),
                 }
+        except json.JSONDecodeError as e:
+            logger.warning(f"LLM JSON parse error (attempt {attempt+1}/{provider.max_retries}): {e}")
+            if attempt == provider.max_retries - 1:
+                logger.error(f"LLM classification failed after {provider.max_retries} attempts")
+                return {
+                    "is_relevant": None,
+                    "relevance_score": 0,
+                    "event_type": None,
+                    "tags": [],
+                    "companies": [],
+                    "summary_short": article.plain_content[:200] if article.plain_content else "",
+                    "summary_long": "",
+                }
+            import asyncio
+            await asyncio.sleep(2 ** attempt)
         except Exception as e:
             if attempt == provider.max_retries - 1:
                 logger.error(f"LLM classification failed: {e}")
@@ -700,6 +734,7 @@ def _generate_digest_content(articles, provider) -> str:
 
             prompt = (
                 f"以下是今日 {len(articles)} 篇科技文章中最重要的 {len(top_articles)} 篇。\n"
+                "这些文章主要围绕具身智能、世界模型、人形机器人等相关领域。\n"
                 "请生成一份简洁的每日摘要，包含：\n"
                 "1. 一段话概述今日整体动态（3-5句话）\n"
                 "2. 按主题分组，每个主题用 `## 主题名称` 标题（前后各空一行），每组2-3句话分析\n"
@@ -708,13 +743,14 @@ def _generate_digest_content(articles, provider) -> str:
                 "注意：\n"
                 "- 每个 `## ` 标题前后必须各空一行\n"
                 "- 文章链接必须使用 Markdown 链接格式 `[标题](URL)`\n"
-                "- 不要使用 HTML 标签\n\n"
+                "- 不要使用 HTML 标签\n"
+                "- 重点关注具身智能、世界模型、机器人相关的发展趋势\n\n"
                 f"文章：\n\n" + "\n\n".join(article_summaries)
             )
 
             result = _call_llm_sync(
                 provider=provider,
-                system_prompt="你是科技新闻编辑助手，擅长从文章中提炼关键趋势，生成简洁的每日摘要。",
+                system_prompt="你是科技新闻编辑助手，专注于具身智能和世界模型领域，擅长从文章中提炼关键趋势，生成简洁的每日摘要。",
                 user_prompt=prompt,
                 timeout=120,
             )
@@ -757,6 +793,11 @@ async def do_generate_digest(workflow_id: str) -> dict:
         tomorrow = today + timedelta(days=1)
         yesterday = today - timedelta(days=1)
 
+        # Query strategy: prioritize relevant articles (is_relevant == True),
+        # only fall back to all articles if no relevant ones exist for the date range.
+        # This ensures the daily digest focuses on embodied AI and world model topics.
+
+        # Try today's relevant articles first
         result = await session.execute(
             select(RawArticle).where(
                 RawArticle.created_at >= today,
@@ -766,15 +807,7 @@ async def do_generate_digest(workflow_id: str) -> dict:
         )
         articles = result.scalars().all()
 
-        if not articles:
-            result = await session.execute(
-                select(RawArticle).where(
-                    RawArticle.created_at >= today,
-                    RawArticle.created_at < tomorrow,
-                ).order_by(RawArticle.publish_time.desc()).limit(30)
-            )
-            articles = result.scalars().all()
-
+        # If no relevant articles today, try yesterday's relevant ones
         if not articles:
             result = await session.execute(
                 select(RawArticle).where(
@@ -785,6 +818,17 @@ async def do_generate_digest(workflow_id: str) -> dict:
             )
             articles = result.scalars().all()
 
+        # If still no relevant articles, try all articles from today
+        if not articles:
+            result = await session.execute(
+                select(RawArticle).where(
+                    RawArticle.created_at >= today,
+                    RawArticle.created_at < tomorrow,
+                ).order_by(RawArticle.publish_time.desc()).limit(30)
+            )
+            articles = result.scalars().all()
+
+        # Last resort: all articles from yesterday
         if not articles:
             result = await session.execute(
                 select(RawArticle).where(
@@ -809,6 +853,11 @@ async def do_generate_digest(workflow_id: str) -> dict:
             digest_provider = result.scalar_one_or_none()
 
         content_md = _generate_digest_content(articles, digest_provider)
+
+        # Add relevance note if any non-relevant articles were included
+        non_relevant = [a for a in articles if not a.is_relevant]
+        if non_relevant:
+            content_md += f"\n\n> **注意**: 本次摘要包含 {len(non_relevant)} 篇未标记为具身智能/世界模型相关的文章，仅供参考。"
 
         result = await session.execute(
             select(DailyDigest).where(DailyDigest.digest_date == today)
