@@ -2,10 +2,178 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { useState } from "react";
-import { Filter, ExternalLink, Rss, MessageSquare, ChevronLeft, ChevronRight } from "lucide-react";
+import { useState, Fragment } from "react";
+import { Filter, ExternalLink, Rss, MessageSquare, ChevronLeft, ChevronRight, FileText, ChevronDown, ChevronUp } from "lucide-react";
 
 const PAGE_SIZE = 30;
+
+function ArticleRow({ article }: { article: any }) {
+  const [expanded, setExpanded] = useState(false);
+
+  const hasSummary = article.status === "classified" && (article.summary_short || article.summary_long);
+
+  return (
+    <Fragment>
+      <tr className="hover:bg-gray-50">
+        <td className="px-4 py-3">
+          <a
+            href={article.article_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 hover:underline inline-flex items-center gap-1"
+          >
+            {article.title}
+            <ExternalLink size={12} />
+          </a>
+        </td>
+        <td className="px-4 py-3 text-gray-600">{article.account_name}</td>
+        <td className="px-4 py-3">
+          {article.source_type === "rss" ? (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-purple-100 text-purple-700 rounded-full text-xs">
+              <Rss size={10} />
+              RSS
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-xs">
+              <MessageSquare size={10} />
+              微信
+            </span>
+          )}
+        </td>
+        <td className="px-4 py-3">
+          {article.is_relevant === true && (
+            <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded-full text-xs">
+              是
+            </span>
+          )}
+          {article.is_relevant === false && (
+            <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-xs">
+              否
+            </span>
+          )}
+          {article.is_relevant === null && (
+            <span className="px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full text-xs">
+              待处理
+            </span>
+          )}
+        </td>
+        <td className="px-4 py-3 text-gray-600">{article.primary_event_type || "-"}</td>
+        <td className="px-4 py-3">
+          {hasSummary ? (
+            <button
+              onClick={() => setExpanded(!expanded)}
+              className="inline-flex items-center gap-1 px-2 py-1 bg-blue-50 text-blue-600 rounded-md hover:bg-blue-100 transition-colors"
+            >
+              <FileText size={14} />
+              <span className="text-xs">查看</span>
+              {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+            </button>
+          ) : (
+            <span className="text-gray-400 text-xs">待分类</span>
+          )}
+        </td>
+        <td className="px-4 py-3 text-gray-500">
+          {article.publish_time
+            ? new Date(article.publish_time).toLocaleDateString()
+            : "-"}
+        </td>
+      </tr>
+      {expanded && hasSummary && (
+        <tr>
+          <td colSpan={7} className="px-0 py-0">
+            <div className="bg-gray-50 border-y border-gray-200 px-6 py-5">
+              <div className="max-w-4xl">
+                <div className="flex items-center gap-2 mb-4">
+                  <FileText size={14} className="text-blue-500" />
+                  <span className="text-sm font-semibold text-gray-800">文章摘要</span>
+                  <span className="text-xs text-gray-400">— {article.title}</span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                  {article.summary_short && (
+                    <div className="bg-white rounded-lg border p-3">
+                      <div className="flex items-center gap-1.5 mb-2">
+                        <span className="text-xs font-medium text-blue-600">💬 一句话摘要</span>
+                      </div>
+                      <p className="text-sm text-gray-700 leading-relaxed">{article.summary_short}</p>
+                    </div>
+                  )}
+                  {article.summary_long && (
+                    <div className="bg-white rounded-lg border p-3">
+                      <div className="flex items-center gap-1.5 mb-2">
+                        <span className="text-xs font-medium text-blue-600">📋 详细摘要</span>
+                      </div>
+                      <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{article.summary_long}</p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="border-t border-gray-200 pt-4">
+                  <div className="flex flex-wrap gap-4">
+                    {article.tags_json && article.tags_json.length > 0 && (
+                      <div>
+                        <div className="text-xs font-medium text-gray-400 mb-1.5">🏷️ 标签</div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {article.tags_json.map((tag: string, i: number) => (
+                            <span key={i} className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded text-xs">
+                              {tag}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {article.companies_json && article.companies_json.length > 0 && (
+                      <div>
+                        <div className="text-xs font-medium text-gray-400 mb-1.5">🏢 公司</div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {article.companies_json.map((c: string, i: number) => (
+                            <span key={i} className="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-xs">
+                              {c}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {article.primary_event_type && (
+                      <div>
+                        <div className="text-xs font-medium text-gray-400 mb-1.5">📊 事件类型</div>
+                        <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded text-xs">
+                          {article.primary_event_type}
+                        </span>
+                      </div>
+                    )}
+                    {article.relevance_score != null && (
+                      <div>
+                        <div className="text-xs font-medium text-gray-400 mb-1.5">⭐ 相关性</div>
+                        <div className="flex items-center gap-2">
+                          <div className="w-16 h-2 bg-gray-200 rounded-full overflow-hidden">
+                            <div
+                              className={`h-full rounded-full ${
+                                article.relevance_score >= 7
+                                  ? "bg-green-500"
+                                  : article.relevance_score >= 4
+                                    ? "bg-yellow-500"
+                                    : "bg-red-500"
+                              }`}
+                              style={{ width: `${article.relevance_score * 10}%` }}
+                            />
+                          </div>
+                          <span className="text-xs font-medium text-gray-600">
+                            {article.relevance_score}/10
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </td>
+        </tr>
+      )}
+    </Fragment>
+  );
+}
 
 export default function ArticlesPage() {
   const [filters, setFilters] = useState({
@@ -116,68 +284,20 @@ export default function ArticlesPage() {
               <th className="text-left px-4 py-3 font-medium text-gray-500">类型</th>
               <th className="text-left px-4 py-3 font-medium text-gray-500">相关性</th>
               <th className="text-left px-4 py-3 font-medium text-gray-500">事件</th>
+              <th className="text-left px-4 py-3 font-medium text-gray-500">摘要</th>
               <th className="text-left px-4 py-3 font-medium text-gray-500">日期</th>
             </tr>
           </thead>
           <tbody className="divide-y">
             {isLoading && (
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-gray-400">
+                <td colSpan={7} className="px-4 py-8 text-center text-gray-400">
                   加载中...
                 </td>
               </tr>
             )}
             {articles?.map((a: any) => (
-              <tr key={a.id} className="hover:bg-gray-50">
-                <td className="px-4 py-3">
-                  <a
-                    href={a.article_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-blue-600 hover:underline inline-flex items-center gap-1"
-                  >
-                    {a.title}
-                    <ExternalLink size={12} />
-                  </a>
-                </td>
-                <td className="px-4 py-3 text-gray-600">{a.account_name}</td>
-                <td className="px-4 py-3">
-                  {a.source_type === "rss" ? (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-purple-100 text-purple-700 rounded-full text-xs">
-                      <Rss size={10} />
-                      RSS
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-xs">
-                      <MessageSquare size={10} />
-                      微信
-                    </span>
-                  )}
-                </td>
-                <td className="px-4 py-3">
-                  {a.is_relevant === true && (
-                    <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded-full text-xs">
-                      是
-                    </span>
-                  )}
-                  {a.is_relevant === false && (
-                    <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-xs">
-                      否
-                    </span>
-                  )}
-                  {a.is_relevant === null && (
-                    <span className="px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full text-xs">
-                      待处理
-                    </span>
-                  )}
-                </td>
-                <td className="px-4 py-3 text-gray-600">{a.primary_event_type || "-"}</td>
-                <td className="px-4 py-3 text-gray-500">
-                  {a.publish_time
-                    ? new Date(a.publish_time).toLocaleDateString()
-                    : "-"}
-                </td>
-              </tr>
+              <ArticleRow key={a.id} article={a} />
             ))}
           </tbody>
         </table>

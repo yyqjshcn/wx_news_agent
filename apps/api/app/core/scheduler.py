@@ -35,6 +35,15 @@ def _get_settings():
     return get_settings()
 
 
+def _ensure_tz(dt: datetime | None) -> datetime | None:
+    """Ensure datetime is timezone-aware (UTC)."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 async def _mark_run_started(run_id: str) -> str:
     session = async_session()
     try:
@@ -66,8 +75,9 @@ async def _mark_run_finished(
         run.finished_at = finished_at
         run.error_message = error_message
         run.summary_json = summary or {}
-        if run.started_at:
-            run.duration_ms = int((finished_at - run.started_at).total_seconds() * 1000)
+        started_at = _ensure_tz(run.started_at)
+        if started_at:
+            run.duration_ms = int((finished_at - started_at).total_seconds() * 1000)
 
         workflow = await session.get(Workflow, run.workflow_id)
         if workflow:
@@ -109,6 +119,62 @@ async def _fetch_articles_from_adapter(fakeid: str, count: int = 20) -> list:
         if data.get("success"):
             return data.get("data", {}).get("articles", [])
         return data.get("list", data.get("articles", []))
+
+
+async def _fetch_article_content(url: str) -> dict:
+    """Fetch full article content via WeChat adapter POST /api/article."""
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                f"{WECHAT_ADAPTER_URL}/api/article",
+                json={"url": url},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if data.get("success") and data.get("data"):
+                return {
+                    "plain_content": data["data"].get("plain_content", ""),
+                    "html_content": data["data"].get("content", ""),
+                }
+            return {"plain_content": "", "html_content": "", "error": data.get("error", "No content returned")}
+    except Exception as e:
+        logger.warning(f"Failed to fetch article content from {url}: {e}")
+        return {"plain_content": "", "html_content": "", "error": str(e)}
+
+
+async def _fetch_rss_article_content(url: str) -> dict:
+    """Fetch full article content from an RSS article URL."""
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            html = resp.text
+            
+            from lxml import html as lxml_html
+            tree = lxml_html.fromstring(html)
+            
+            # Remove script and style elements
+            for el in tree.xpath("//script|//style|//nav|//footer|//header|//aside"):
+                el.getparent().remove(el, ignore_already_removed=True)
+            
+            # Try to find main content area
+            content_el = tree.xpath("//article") or tree.xpath("//main") or tree.xpath("//div[contains(@class, 'content')]") or tree.xpath("//div[contains(@class, 'article')]") or tree.xpath("//div[contains(@class, 'post')]") or tree.xpath("//body")
+            if content_el:
+                text = content_el[0].text_content()
+            else:
+                text = tree.text_content()
+            
+            # Clean up whitespace
+            lines = [line.strip() for line in text.split("\n") if line.strip()]
+            plain_text = "\n".join(lines)
+            
+            return {
+                "plain_content": plain_text[:10000],
+                "html_content": html[:50000],
+            }
+    except Exception as e:
+        logger.warning(f"Failed to fetch RSS article content from {url}: {e}")
+        return {"plain_content": "", "html_content": "", "error": str(e)}
 
 
 async def do_daily_ingest(workflow_id: str) -> dict:
@@ -177,6 +243,16 @@ async def do_daily_ingest(workflow_id: str) -> dict:
                     if existing:
                         continue
 
+                    # Fetch full article content
+                    plain_content = digest
+                    html_content = None
+                    if link:
+                        content_result = await _fetch_article_content(link)
+                        if content_result.get("plain_content"):
+                            plain_content = content_result["plain_content"]
+                        if content_result.get("html_content"):
+                            html_content = content_result["html_content"]
+
                     new_article = RawArticle(
                         id=str(hashlib.md5(link.encode()).hexdigest()),
                         article_url=link,
@@ -186,7 +262,8 @@ async def do_daily_ingest(workflow_id: str) -> dict:
                         fakeid=account.fakeid,
                         publish_time=publish_time,
                         author=author or None,
-                        plain_content=digest,
+                        plain_content=plain_content,
+                        html_content=html_content,
                         content_hash=content_hash,
                         status="new",
                         is_relevant=matched if keyword_texts else None,
@@ -221,20 +298,9 @@ async def do_daily_ingest(workflow_id: str) -> dict:
 async def do_classify_articles(workflow_id: str) -> dict:
     session = async_session()
     try:
-        result = await session.execute(
-            select(RawArticle).where(
-                RawArticle.status == "new",
-            ).order_by(RawArticle.created_at.asc()).limit(20)
-        )
-        articles = result.scalars().all()
-
-        if not articles:
-            return {
-                "workflow_id": workflow_id,
-                "classified_count": 0,
-                "message": "No new articles to classify",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
+        BATCH_SIZE = 10
+        total_classified = 0
+        total_errors = []
 
         result = await session.execute(
             select(LlmProvider).where(
@@ -250,54 +316,72 @@ async def do_classify_articles(workflow_id: str) -> dict:
             )
             provider = result.scalar_one_or_none()
 
-        classified_count = 0
-        errors = []
+        if not provider:
+            return {
+                "workflow_id": workflow_id,
+                "classified_count": 0,
+                "message": "No enabled LLM provider found",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
 
-        # Process articles concurrently (max 3 at a time to avoid rate limits)
-        semaphore = asyncio.Semaphore(3)
+        while True:
+            result = await session.execute(
+                select(RawArticle).where(
+                    RawArticle.status == "new",
+                ).order_by(RawArticle.created_at.asc()).limit(BATCH_SIZE)
+            )
+            articles = result.scalars().all()
 
-        async def classify_one(article):
-            nonlocal classified_count
-            async with semaphore:
-                try:
-                    classification = await _classify_article_async(article, provider)
-                    
-                    article.is_relevant = classification.get("is_relevant")
-                    article.relevance_score = classification.get("relevance_score")
-                    article.primary_event_type = classification.get("event_type")
-                    article.tags_json = classification.get("tags", [])
-                    article.companies_json = classification.get("companies", [])
-                    article.summary_short = classification.get("summary_short", "")
-                    article.summary_long = classification.get("summary_long", "")
-                    article.status = "classified"
-                    article.updated_at = datetime.now(timezone.utc)
+            if not articles:
+                break
 
-                    if provider:
-                        article.llm_provider_id = provider.id
-                        article.llm_model = provider.default_model
+            errors = []
+            semaphore = asyncio.Semaphore(3)
 
-                    return True, None
-                except Exception as e:
-                    return False, f"{article.title[:30]}: {e}"
+            async def classify_one(article):
+                async with semaphore:
+                    try:
+                        classification = await _classify_article_async(article, provider)
+                        
+                        article.is_relevant = classification.get("is_relevant")
+                        article.relevance_score = classification.get("relevance_score")
+                        article.primary_event_type = classification.get("event_type")
+                        article.tags_json = classification.get("tags", [])
+                        article.companies_json = classification.get("companies", [])
+                        article.summary_short = classification.get("summary_short", "")
+                        article.summary_long = classification.get("summary_long", "")
+                        article.status = "classified"
+                        article.updated_at = datetime.now(timezone.utc)
 
-        tasks = [classify_one(article) for article in articles]
-        results = await asyncio.gather(*tasks)
+                        if provider:
+                            article.llm_provider_id = provider.id
+                            article.llm_model = provider.default_model
 
-        for success, error in results:
-            if success:
-                classified_count += 1
-            else:
-                errors.append(error)
+                        return True, None
+                    except Exception as e:
+                        return False, f"{article.title[:30]}: {e}"
 
-        await session.commit()
+            tasks = [classify_one(article) for article in articles]
+            results = await asyncio.gather(*tasks)
+
+            batch_classified = 0
+            for success, error in results:
+                if success:
+                    batch_classified += 1
+                else:
+                    errors.append(error)
+
+            total_classified += batch_classified
+            total_errors.extend(errors)
+            await session.commit()
+
+            logger.info(f"Classified batch: {batch_classified}/{len(articles)} articles")
 
         return {
             "workflow_id": workflow_id,
-            "classified_count": classified_count,
-            "total_new": len(articles),
-            "errors": errors[:5],
-            "used_llm": provider is not None,
-            "llm_provider": provider.name if provider else None,
+            "classified_count": total_classified,
+            "total_errors": len(total_errors),
+            "errors": total_errors[:10],
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
     finally:
@@ -332,12 +416,14 @@ async def _classify_article_async(article, provider) -> dict:
         headers.update(provider.extra_headers_json)
 
     content = article.plain_content or article.title or ""
+    content_limit = int(len(content) * 0.8)
+    content_for_llm = content[:content_limit] if content_limit > 0 else content
 
     prompt = (
         f"请分析以下微信公众号文章，返回JSON格式的分类结果。\n\n"
         f"文章标题: {article.title}\n"
         f"来源公众号: {article.account_name}\n"
-        f"文章内容: {content[:2000]}\n\n"
+        f"文章内容: {content_for_llm}\n\n"
         "请返回以下JSON格式（不要其他内容）：\n"
         "{\n"
         '  "is_relevant": true/false,  // 是否与具身智能/AI/机器人领域相关\n'
@@ -356,7 +442,7 @@ async def _classify_article_async(article, provider) -> dict:
             {"role": "system", "content": "你是一个专业的科技文章分类助手。请严格按照要求的JSON格式返回结果，不要添加任何其他内容。"},
             {"role": "user", "content": prompt},
         ],
-        "max_tokens": 500,
+        "max_tokens": 2000,
         "temperature": 0.1,
     }
 
@@ -476,6 +562,17 @@ async def do_rss_ingest(workflow_id: str) -> dict:
                     if existing:
                         continue
 
+                    # Fetch full article content
+                    rss_content = entry.get("content", "")
+                    plain_content = rss_content
+                    html_content = None
+                    if link:
+                        content_result = await _fetch_rss_article_content(link)
+                        if content_result.get("plain_content"):
+                            plain_content = content_result["plain_content"]
+                        if content_result.get("html_content"):
+                            html_content = content_result["html_content"]
+
                     new_article = RawArticle(
                         id=str(hashlib.md5(link.encode()).hexdigest()),
                         article_url=link,
@@ -485,7 +582,8 @@ async def do_rss_ingest(workflow_id: str) -> dict:
                         fakeid=None,
                         publish_time=entry.get("published"),
                         author=entry.get("author") or None,
-                        plain_content=entry.get("content", ""),
+                        plain_content=plain_content,
+                        html_content=html_content,
                         content_hash=content_hash,
                         status="new",
                         is_relevant=matched if keyword_texts else None,
@@ -1027,9 +1125,24 @@ async def start_scheduler():
     _scheduler.start()
     logger.info(f"Scheduler started with {len(_scheduler.get_jobs())} jobs")
     
+    # Store the event loop reference for the reload job
+    _event_loop = asyncio.get_event_loop()
+    
+    # Define a wrapper function for the periodic reload job
+    def reload_wrapper():
+        try:
+            # Use the stored event loop to create task
+            if _event_loop.is_running():
+                # Use call_soon_threadsafe to schedule from another thread
+                _event_loop.call_soon_threadsafe(
+                    lambda: asyncio.create_task(reload_scheduler_workflows(_scheduler))
+                )
+        except Exception as e:
+            logger.error(f"Error in reload_wrapper: {e}")
+    
     # Add a periodic reload job to check for workflow changes every 60 seconds
     _scheduler.add_job(
-        lambda: asyncio.create_task(reload_scheduler_workflows(_scheduler)),
+        reload_wrapper,
         "interval",
         seconds=60,
         id="reload_workflows",

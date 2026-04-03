@@ -13,9 +13,19 @@ async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     
-    scheduler = await start_scheduler()
+    scheduler = None
+    try:
+        scheduler = await start_scheduler()
+        logger.info("Scheduler started successfully")
+    except Exception as e:
+        logger.error(f"Failed to start scheduler: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+    
     yield
-    await stop_scheduler(scheduler)
+    
+    if scheduler:
+        await stop_scheduler(scheduler)
 
 
 app = FastAPI(
