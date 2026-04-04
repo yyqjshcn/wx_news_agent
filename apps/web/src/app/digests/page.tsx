@@ -705,7 +705,11 @@ function ChannelConfigForm({
         </div>
       );
 
-    case "email":
+    case "email": {
+      const recipientsInput = (config.recipients || []).join(", ");
+      const ccRecipientsInput = (config.cc_recipients || []).join(", ");
+      const parseEmails = (val: string) => val.split(",").map((s: string) => s.trim()).filter(Boolean);
+
       return (
         <div className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -766,15 +770,29 @@ function ChannelConfigForm({
             <label className="block text-sm font-medium mb-1">收件人邮箱 *</label>
             <input
               type="text" required
-              value={(config.recipients || []).join(", ")}
-              onChange={(e) => set("recipients", e.target.value.split(",").map((s: string) => s.trim()).filter(Boolean))}
+              defaultValue={recipientsInput}
+              onBlur={(e) => set("recipients", parseEmails(e.target.value))}
+              onKeyDown={(e) => { if (e.key === "Enter") set("recipients", parseEmails((e.target as HTMLInputElement).value)) }}
               className="w-full px-3 py-2 border rounded-md text-sm font-mono"
               placeholder="a@example.com, b@example.com"
             />
-            <p className="text-xs text-gray-400 mt-1">多个邮箱用逗号分隔</p>
+            <p className="text-xs text-gray-400 mt-1">多个邮箱用逗号分隔，输入完成后按回车或点击别处保存</p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">抄送邮箱</label>
+            <input
+              type="text"
+              defaultValue={ccRecipientsInput}
+              onBlur={(e) => set("cc_recipients", parseEmails(e.target.value))}
+              onKeyDown={(e) => { if (e.key === "Enter") set("cc_recipients", parseEmails((e.target as HTMLInputElement).value)) }}
+              className="w-full px-3 py-2 border rounded-md text-sm font-mono"
+              placeholder="cc@example.com"
+            />
+            <p className="text-xs text-gray-400 mt-1">多个邮箱用逗号分隔（可选），输入完成后按回车或点击别处保存</p>
           </div>
         </div>
       );
+    }
 
     default:
       return null;

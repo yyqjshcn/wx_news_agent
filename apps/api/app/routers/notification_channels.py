@@ -8,9 +8,18 @@ from app.schemas.notification_channel import (
 from app.models.notification_channel import NotificationChannel
 from app.models.digest import DailyDigest
 from app.services.notification_service import send_to_channel
+from app.core.security import encrypt_api_key
 from sqlalchemy import select
 
 router = APIRouter(prefix="/api/notification-channels", tags=["notification-channels"])
+
+
+def _encrypt_email_password(data: NotificationChannelCreate | NotificationChannelUpdate) -> None:
+    """Encrypt email sender password before saving."""
+    if data.channel_type == "email" and data.config_json:
+        pwd = data.config_json.get("sender_password", "")
+        if pwd and not pwd.startswith("gAAAA"):  # Already encrypted if starts with gAAAA
+            data.config_json["sender_password"] = encrypt_api_key(pwd)
 
 
 @router.get("", response_model=list[NotificationChannelResponse])
@@ -25,6 +34,8 @@ async def create_channel(data: NotificationChannelCreate, db: AsyncSession = Dep
     existing = await db.execute(select(NotificationChannel).where(NotificationChannel.alias == data.alias))
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=400, detail=f"Alias '{data.alias}' already exists")
+
+    _encrypt_email_password(data)
 
     channel = NotificationChannel(**data.model_dump())
     db.add(channel)
@@ -46,6 +57,8 @@ async def update_channel(
         existing = await db.execute(select(NotificationChannel).where(NotificationChannel.alias == data.alias))
         if existing.scalar_one_or_none():
             raise HTTPException(status_code=400, detail=f"Alias '{data.alias}' already exists")
+
+    _encrypt_email_password(data)
 
     for key, value in data.model_dump(exclude_unset=True).items():
         setattr(channel, key, value)

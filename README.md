@@ -171,6 +171,36 @@ uvicorn app.main:app --reload
 
 > 定时任务会在 API 启动时自动注册，无需额外启动 worker。
 
+## 自定义配置
+
+本项目支持通过外部文件自定义 Prompt 和邮件模板，无需修改代码。
+
+### Prompt 配置
+
+Prompt 文件位于 `apps/api/prompts/` 目录：
+
+| 文件 | 用途 |
+|------|------|
+| `classify.template.json` | 文章分类 Prompt 模板（通用） |
+| `classify.json` | 文章分类实际配置（如存在则优先使用） |
+| `digest.template.json` | 每日摘要 Prompt 模板（通用） |
+| `digest.json` | 每日摘要实际配置（如存在则优先使用） |
+
+**使用方式**：复制 `.template.json` 文件并重命名为 `.json`，然后修改其中的内容。系统会优先读取 `.json` 文件。
+
+### 邮件模板
+
+邮件模板位于 `apps/api/templates/` 目录：
+
+| 文件 | 用途 |
+|------|------|
+| `email.template.html` | 邮件 HTML 模板（通用） |
+| `email.html` | 邮件实际模板（如存在则优先使用） |
+
+**使用方式**：复制 `.template.html` 文件并重命名为 `.html`，然后修改其中的 HTML 内容。模板中使用 `{{variable}}` 作为占位符。
+
+> 注意：自定义的 `.json` 和 `.html` 文件不会被 git 跟踪，方便不同用户各自维护。
+
 ## 环境变量
 
 详见 `.env.example`。关键变量：

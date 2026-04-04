@@ -1,0 +1,7 @@
+{
+  "system_prompt": "你是一个专业的科技文章分类助手。请只返回合法的JSON对象，不要包含任何其他内容。",
+  "user_prompt_template": "请分析以下文章，返回JSON格式的分类结果。\n\n文章标题: {title}\n来源: {account_name}\n文章内容: {content}\n\n请严格返回以下JSON对象，不要包含任何其他文字、markdown标记或代码块：\n{\n  \"is_relevant\": true,\n  \"relevance_score\": 8,\n  \"event_type\": \"融资\",\n  \"tags\": [\"tag1\", \"tag2\"],\n  \"companies\": [\"公司1\", \"公司2\"],\n  \"summary_short\": \"一句话摘要\",\n  \"summary_long\": \"详细摘要，3到5句话\"\n}\n注意：\n1. is_relevant 判断标准：{relevance_criteria}\n2. 所有字符串值中的引号和反斜杠必须正确转义。",
+  "relevance_criteria": "请根据文章主题判断是否与指定领域相关",
+  "max_tokens": 1500,
+  "temperature": 0.1
+}

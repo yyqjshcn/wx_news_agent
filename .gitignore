@@ -59,3 +59,9 @@ sqlite_data/
 # Migration scripts (one-time use, not needed in repo)
 scripts/
 apps/worker/celerybeat-schedule
+
+# Custom prompts and templates (keep templates, ignore custom versions)
+apps/api/prompts/*.json
+!apps/api/prompts/*.template.json
+apps/api/templates/*.html
+!apps/api/templates/*.template.html

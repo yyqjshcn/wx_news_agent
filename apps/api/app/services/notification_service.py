@@ -226,26 +226,61 @@ async def _send_email(channel, content, digest_date, item_count):
     from app.core.security import decrypt_api_key
 
     cfg = channel.config_json
-    sender_password = decrypt_api_key(cfg.get("sender_password", ""))
+    smtp_host = cfg.get("smtp_host", "")
+    smtp_port = cfg.get("smtp_port", 587)
+    sender_email = cfg.get("sender_email", "")
+    sender_password_encrypted = cfg.get("sender_password", "")
+    recipients = cfg.get("recipients", [])
+    cc_recipients = cfg.get("cc_recipients", [])
+    all_recipients = recipients + cc_recipients
+
+    if not smtp_host:
+        raise ValueError("SMTP host is not configured")
+    if not sender_email:
+        raise ValueError("Sender email is not configured")
+    if not all_recipients:
+        raise ValueError("No recipients configured")
+
+    # Decrypt password (handle both encrypted and plain text for backward compatibility)
+    try:
+        sender_password = decrypt_api_key(sender_password_encrypted)
+    except Exception:
+        # If decryption fails, try using the password as-is (plain text fallback)
+        sender_password = sender_password_encrypted
+
     html_content = _build_html_digest(content, digest_date, item_count)
 
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"{cfg.get('message_title', '每日摘要')} - {digest_date}"
-    msg["From"] = f"{cfg.get('sender_name', '每日摘要')} <{cfg.get('sender_email', '')}>"
-    msg["To"] = ", ".join(cfg.get("recipients", []))
+    msg["Subject"] = f"世界模型与具身智能每日新闻摘要 - {digest_date}"
+    msg["From"] = f"{cfg.get('sender_name', '每日摘要')} <{sender_email}>"
+    msg["To"] = ", ".join(recipients)
+    if cc_recipients:
+        msg["Cc"] = ", ".join(cc_recipients)
     msg.attach(MIMEText(html_content, "html", "utf-8"))
 
-    if cfg.get("use_tls", True):
-        server = smtplib.SMTP(cfg.get("smtp_host", ""), cfg.get("smtp_port", 587))
-        server.starttls()
-    else:
-        server = smtplib.SMTP(cfg.get("smtp_host", ""), cfg.get("smtp_port", 587))
+    server = None
+    try:
+        if cfg.get("use_tls", True):
+            server = smtplib.SMTP(smtp_host, smtp_port)
+            server.starttls()
+        else:
+            server = smtplib.SMTP(smtp_host, smtp_port)
 
-    server.login(cfg.get("sender_email", ""), sender_password)
-    server.sendmail(cfg.get("sender_email", ""), cfg.get("recipients", []), msg.as_string())
-    server.quit()
-
-    return {"success": True, "message": f"Sent to {len(cfg.get('recipients', []))} recipient(s)"}
+        server.login(sender_email, sender_password)
+        server.sendmail(sender_email, all_recipients, msg.as_string())
+        return {"success": True, "message": f"Sent to {len(recipients)} recipient(s), {len(cc_recipients)} cc(s)"}
+    except smtplib.SMTPAuthenticationError as e:
+        raise ValueError(f"SMTP authentication failed: {e}")
+    except smtplib.SMTPConnectError as e:
+        raise ValueError(f"Failed to connect to SMTP server {smtp_host}:{smtp_port}: {e}")
+    except smtplib.SMTPException as e:
+        raise ValueError(f"SMTP error: {e}")
+    finally:
+        if server:
+            try:
+                server.quit()
+            except Exception:
+                pass
 
 
 # --- Helper functions ---
@@ -287,35 +322,90 @@ def _markdown_to_plain_text(text: str) -> str:
 
 def _build_html_digest(content_markdown: str, digest_date: str, item_count: int) -> str:
     import re
-    lines = content_markdown.split("\n")
-    parts = []
-    parts.append('<div style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 680px; margin: 0 auto; padding: 20px; color: #1a1a1a;">')
-    parts.append(f'<div style="background: #f8f9fa; padding: 16px 20px; border-radius: 8px; margin-bottom: 24px;"><span style="font-size: 14px; color: #666;">📅 日期: {digest_date}</span><span style="margin-left: 20px; font-size: 14px; color: #666;">📊 文章数: {item_count} 篇</span></div>')
+    from app.core.prompt_loader import load_template
 
+    lines = content_markdown.split("\n")
+
+    # Parse content to extract sections and stats
+    sections = []  # list of {"title": str, "items": list}
+    current_section = {"title": None, "items": [], "intro": ""}
+    topic_count = 0
+    sources = set()
+
+    skip_header = True
     for line in lines:
         stripped = line.strip()
-        if not stripped:
-            parts.append("<br>")
-        elif stripped.startswith("# "):
-            parts.append(f'<h1 style="font-size: 22px; margin: 0 0 12px 0;">{stripped[2:]}</h1>')
-        elif stripped.startswith("## "):
-            parts.append(f'<h2 style="font-size: 17px; margin: 20px 0 8px 0; color: #333;">{stripped[3:]}</h2>')
-        elif stripped.startswith("### "):
-            parts.append(f'<h3 style="font-size: 15px; margin: 16px 0 6px 0; color: #555;">{stripped[4:]}</h3>')
-        elif stripped.startswith("---"):
-            parts.append('<hr style="border: none; border-top: 1px solid #e0e0e0; margin: 16px 0;">')
+        if skip_header:
+            if stripped.startswith("# ") or stripped.startswith("## "):
+                continue
+            if stripped.startswith("**日期**") or stripped.startswith("**共") or stripped.startswith("---"):
+                continue
+            if stripped == "":
+                continue
+            skip_header = False
+
+        if stripped.startswith("## "):
+            if current_section["title"] is not None or current_section["items"]:
+                sections.append(current_section)
+                topic_count += 1
+            current_section = {"title": stripped[3:], "items": [], "intro": ""}
         elif stripped.startswith("- [") and "](" in stripped:
             match = re.match(r"- \[(.+?)\]\((.+?)\)\s*(.*)", stripped)
             if match:
                 title, url, suffix = match.groups()
-                link = f'<a href="{url}" style="color: #2563eb; text-decoration: none;">{title}</a>'
-                parts.append(f'<div style="margin: 4px 0 4px 16px; font-size: 14px;">• {link} {suffix}</div>' if suffix else f'<div style="margin: 4px 0 4px 16px; font-size: 14px;">• {link}</div>')
-            else:
-                parts.append(f'<div style="margin: 4px 0; font-size: 14px;">{stripped}</div>')
-        elif stripped.startswith("**") and stripped.endswith("**"):
-            parts.append(f'<p style="font-weight: bold; margin: 8px 0; font-size: 14px;">{stripped[2:-2]}</p>')
-        else:
-            parts.append(f'<p style="margin: 6px 0; font-size: 14px; line-height: 1.6;">{stripped}</p>')
+                # Extract source from suffix like "— 来源公众号"
+                source = ""
+                if "—" in suffix:
+                    source = suffix.split("—", 1)[1].strip()
+                    sources.add(source)
+                current_section["items"].append({"title": title, "url": url, "suffix": suffix, "source": source})
+        elif stripped and not stripped.startswith("---") and not stripped.startswith("**"):
+            if current_section["title"] is None and not current_section["items"]:
+                current_section["intro"] += stripped + " "
+            elif current_section["title"] is not None and not current_section["items"]:
+                current_section["intro"] += stripped + " "
 
-    parts.append("</div>")
-    return "\n".join(parts)
+    if current_section["title"] is not None or current_section["items"]:
+        sections.append(current_section)
+        if current_section["title"]:
+            topic_count += 1
+
+    # Build content HTML (sections only, not the full page)
+    content_parts = []
+    for section in sections:
+        if section["title"]:
+            content_parts.append('<tr><td style="padding: 24px 32px 8px;">')
+            content_parts.append(f'<div style="border-left: 3px solid #1E40AF; padding-left: 12px;">')
+            content_parts.append(f'<h2 style="font-size: 17px; font-weight: 700; color: #1a1a1a; margin: 0 0 4px;">{section["title"]}</h2>')
+            if section["intro"].strip():
+                content_parts.append(f'<p style="font-size: 13px; color: #666; margin: 4px 0 0; line-height: 1.5;">{section["intro"].strip()}</p>')
+            content_parts.append('</div>')
+            content_parts.append('</td></tr>')
+        elif section["intro"].strip():
+            content_parts.append('<tr><td style="padding: 24px 32px 8px;">')
+            content_parts.append(f'<p style="font-size: 14px; color: #444; line-height: 1.7; margin: 0;">{section["intro"].strip()}</p>')
+            content_parts.append('</td></tr>')
+
+        for item in section["items"]:
+            content_parts.append('<tr><td style="padding: 6px 32px 6px 44px;">')
+            content_parts.append(f'<div style="font-size: 14px; line-height: 1.6;">')
+            content_parts.append(f'<span style="color: #1E40AF; margin-right: 6px;">&#8226;</span>')
+            content_parts.append(f'<a href="{item["url"]}" style="color: #1a1a1a; text-decoration: underline; font-weight: 600;">{item["title"]}</a>')
+            if item["source"]:
+                content_parts.append(f'<span style="color: #999; font-size: 12px; margin-left: 6px;">{item["source"]}</span>')
+            content_parts.append('</div>')
+            content_parts.append('</td></tr>')
+
+    content_html = "\n".join(content_parts)
+
+    # Load email template and substitute variables
+    template = load_template("email")
+    return template.substitute(
+        newsletter_title="世界模型与具身智能",
+        digest_date=digest_date,
+        item_count=str(item_count),
+        topic_count=str(topic_count),
+        source_count=str(len(sources)),
+        content_html=content_html,
+        footer_text="忆生科技PR团队",
+    )
