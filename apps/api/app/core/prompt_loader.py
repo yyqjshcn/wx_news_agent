@@ -6,8 +6,8 @@ import json
 from pathlib import Path
 from string import Template
 
-PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
-TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
+PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
+TEMPLATES_DIR = Path(__file__).parent.parent.parent / "templates"
 
 
 def load_prompt(name: str) -> dict:

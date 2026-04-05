@@ -116,6 +116,13 @@ async def _fetch_articles_from_adapter(fakeid: str, count: int = 20) -> list:
         )
         resp.raise_for_status()
         data = resp.json()
+
+        # Check for WeChat adapter error responses
+        ret = data.get("ret")
+        if ret is not None and ret != 0:
+            msg = data.get("msg", "unknown error")
+            raise RuntimeError(f"WeChat adapter error: ret={ret}, msg={msg}")
+
         if data.get("success"):
             return data.get("data", {}).get("articles", [])
         return data.get("list", data.get("articles", []))
@@ -281,9 +288,18 @@ async def do_daily_ingest(workflow_id: str) -> dict:
                 account.last_checked_at = datetime.now(timezone.utc)
                 await session.commit()
 
+        # Determine status based on actual results
+        if errors:
+            status = "failed"
+        elif total_fetched == 0:
+            status = "failed"
+            errors.append("No articles fetched from any source. Check WeChat login status and source accounts.")
+        else:
+            status = "completed"
+
         return {
             "workflow_id": workflow_id,
-            "status": "completed",
+            "status": status,
             "articles_fetched": total_fetched,
             "articles_stored": total_stored,
             "articles_matched_keyword": total_matched,
@@ -299,8 +315,10 @@ async def do_classify_articles(workflow_id: str) -> dict:
     session = async_session()
     try:
         BATCH_SIZE = 10
+        MAX_WORKFLOW_MINUTES = 30
         total_classified = 0
         total_errors = []
+        start_time = datetime.now(timezone.utc)
 
         result = await session.execute(
             select(LlmProvider).where(
@@ -325,6 +343,12 @@ async def do_classify_articles(workflow_id: str) -> dict:
             }
 
         while True:
+            # Check overall workflow timeout
+            elapsed = datetime.now(timezone.utc) - start_time
+            if elapsed.total_seconds() > MAX_WORKFLOW_MINUTES * 60:
+                total_errors.append(f"Workflow timed out after {MAX_WORKFLOW_MINUTES} minutes")
+                break
+
             result = await session.execute(
                 select(RawArticle).where(
                     RawArticle.status == "new",
@@ -341,8 +365,11 @@ async def do_classify_articles(workflow_id: str) -> dict:
             async def classify_one(article):
                 async with semaphore:
                     try:
-                        classification = await _classify_article_async(article, provider)
-                        
+                        classification = await asyncio.wait_for(
+                            _classify_article_async(article, provider),
+                            timeout=120,
+                        )
+
                         article.is_relevant = classification.get("is_relevant")
                         article.relevance_score = classification.get("relevance_score")
                         article.primary_event_type = classification.get("event_type")
@@ -358,6 +385,8 @@ async def do_classify_articles(workflow_id: str) -> dict:
                             article.llm_model = provider.default_model
 
                         return True, None
+                    except asyncio.TimeoutError:
+                        return False, f"{article.title[:30]}: LLM request timed out (120s)"
                     except Exception as e:
                         return False, f"{article.title[:30]}: {e}"
 
@@ -377,8 +406,17 @@ async def do_classify_articles(workflow_id: str) -> dict:
 
             logger.info(f"Classified batch: {batch_classified}/{len(articles)} articles")
 
+        # Determine status based on results
+        if total_errors and total_classified == 0:
+            status = "failed"
+        elif total_errors:
+            status = "partial"
+        else:
+            status = "completed"
+
         return {
             "workflow_id": workflow_id,
+            "status": status,
             "classified_count": total_classified,
             "total_errors": len(total_errors),
             "errors": total_errors[:10],
@@ -623,9 +661,18 @@ async def do_rss_ingest(workflow_id: str) -> dict:
                 feed.last_checked_at = datetime.now(timezone.utc)
                 await session.commit()
 
+        # Determine status based on actual results
+        if errors:
+            status = "failed"
+        elif total_fetched == 0:
+            status = "failed"
+            errors.append("No articles fetched from any RSS feed. Check feed URLs and connectivity.")
+        else:
+            status = "completed"
+
         return {
             "workflow_id": workflow_id,
-            "status": "completed",
+            "status": status,
             "articles_fetched": total_fetched,
             "articles_stored": total_stored,
             "articles_matched_keyword": total_matched,

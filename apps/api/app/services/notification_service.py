@@ -345,7 +345,7 @@ def _build_html_digest(content_markdown: str, digest_date: str, item_count: int)
             skip_header = False
 
         if stripped.startswith("## "):
-            if current_section["title"] is not None or current_section["items"]:
+            if current_section["title"] is not None or current_section["items"] or current_section["intro"].strip():
                 sections.append(current_section)
                 topic_count += 1
             current_section = {"title": stripped[3:], "items": [], "intro": ""}
@@ -365,7 +365,7 @@ def _build_html_digest(content_markdown: str, digest_date: str, item_count: int)
             elif current_section["title"] is not None and not current_section["items"]:
                 current_section["intro"] += stripped + " "
 
-    if current_section["title"] is not None or current_section["items"]:
+    if current_section["title"] is not None or current_section["items"] or current_section["intro"].strip():
         sections.append(current_section)
         if current_section["title"]:
             topic_count += 1

@@ -9,27 +9,27 @@
 <!-- Header -->
 <tr><td style="background: linear-gradient(135deg, #1E3A5F 0%, #1E40AF 100%); padding: 32px 32px 28px; text-align: center;">
 <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 3px; color: rgba(255,255,255,0.7); margin-bottom: 8px;">DAILY NEWSLETTER</div>
-<div style="font-size: 22px; font-weight: 700; color: #ffffff; margin: 0 0 8px;">{{newsletter_title}}</div>
-<div style="font-size: 14px; color: rgba(255,255,255,0.85);">{{digest_date}}</div>
+<div style="font-size: 22px; font-weight: 700; color: #ffffff; margin: 0 0 8px;">${newsletter_title}</div>
+<div style="font-size: 14px; color: rgba(255,255,255,0.85);">${digest_date}</div>
 </td></tr>
 
 <!-- Stats -->
 <tr><td style="padding: 24px 32px; border-bottom: 1px solid #f0f0f0;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
-<td width="33%" align="center" style="padding: 12px;"><div style="font-size: 24px; font-weight: 700; color: #1E40AF;">{{item_count}}</div><div style="font-size: 12px; color: #888; margin-top: 4px;">精选文章</div></td>
-<td width="33%" align="center" style="padding: 12px; border-left: 1px solid #f0f0f0; border-right: 1px solid #f0f0f0;"><div style="font-size: 24px; font-weight: 700; color: #1E40AF;">{{topic_count}}</div><div style="font-size: 12px; color: #888; margin-top: 4px;">主题领域</div></td>
-<td width="33%" align="center" style="padding: 12px;"><div style="font-size: 24px; font-weight: 700; color: #1E40AF;">{{source_count}}</div><div style="font-size: 12px; color: #888; margin-top: 4px;">信息来源</div></td>
+<td width="33%" align="center" style="padding: 12px;"><div style="font-size: 24px; font-weight: 700; color: #1E40AF;">${item_count}</div><div style="font-size: 12px; color: #888; margin-top: 4px;">精选文章</div></td>
+<td width="33%" align="center" style="padding: 12px; border-left: 1px solid #f0f0f0; border-right: 1px solid #f0f0f0;"><div style="font-size: 24px; font-weight: 700; color: #1E40AF;">${topic_count}</div><div style="font-size: 12px; color: #888; margin-top: 4px;">主题领域</div></td>
+<td width="33%" align="center" style="padding: 12px;"><div style="font-size: 24px; font-weight: 700; color: #1E40AF;">${source_count}</div><div style="font-size: 12px; color: #888; margin-top: 4px;">信息来源</div></td>
 </tr></table>
 </td></tr>
 
 <!-- Content injected by rendering engine -->
-{{content_html}}
+${content_html}
 
 <!-- Footer -->
 <tr><td style="padding: 32px 32px 24px; border-top: 1px solid #f0f0f0; text-align: center;">
 <div style="font-size: 12px; color: #999; line-height: 1.8;">
 <div>本摘要由 AI 自动生成，仅供参考</div>
-<div style="margin-top: 8px; font-weight: 500; color: #666;">{{footer_text}}</div>
+<div style="margin-top: 8px; font-weight: 500; color: #666;">${footer_text}</div>
 </div>
 </td></tr>
 
