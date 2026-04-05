@@ -248,7 +248,7 @@ async def _send_email(channel, content, digest_date, item_count):
         # If decryption fails, try using the password as-is (plain text fallback)
         sender_password = sender_password_encrypted
 
-    html_content = _build_html_digest(content, digest_date, item_count)
+    html_content = _build_html_digest(content, digest_date, item_count, cfg.get("template", "email"))
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = f"世界模型与具身智能每日新闻摘要 - {digest_date}"
@@ -320,7 +320,7 @@ def _markdown_to_plain_text(text: str) -> str:
     return text
 
 
-def _build_html_digest(content_markdown: str, digest_date: str, item_count: int) -> str:
+def _build_html_digest(content_markdown: str, digest_date: str, item_count: int, template_name: str = "email") -> str:
     import re
     from app.core.prompt_loader import load_template
 
@@ -399,7 +399,7 @@ def _build_html_digest(content_markdown: str, digest_date: str, item_count: int)
     content_html = "\n".join(content_parts)
 
     # Load email template and substitute variables
-    template = load_template("email")
+    template = load_template(template_name)
     return template.substitute(
         newsletter_title="世界模型与具身智能",
         digest_date=digest_date,

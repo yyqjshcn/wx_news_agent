@@ -150,6 +150,7 @@ export default function WorkflowsPage() {
 
   const workflowTypes = [
     { value: "daily_ingest", label: "每日采集" },
+    { value: "rss_ingest", label: "RSS采集" },
     { value: "midday_refresh", label: "午间刷新" },
     { value: "classify_pending_articles", label: "文章分类" },
     { value: "generate_daily_digest", label: "生成摘要" },

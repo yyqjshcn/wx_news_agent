@@ -6,10 +6,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.workflow import Workflow, WorkflowRun, WorkflowType, WorkflowRunStatus, TriggerType
 from app.schemas.workflow import WorkflowCreate, WorkflowUpdate
 
+WORKFLOW_ORDER = {
+    "login_health_check": 0,
+    "daily_ingest": 1,
+    "rss_ingest": 2,
+    "classify_pending_articles": 3,
+    "generate_daily_digest": 4,
+}
+
 
 async def get_workflows(db: AsyncSession) -> list[Workflow]:
-    result = await db.execute(select(Workflow).order_by(Workflow.created_at.desc()))
-    return result.scalars().all()
+    result = await db.execute(select(Workflow))
+    workflows = result.scalars().all()
+
+    def sort_key(w):
+        order = WORKFLOW_ORDER.get(w.workflow_type.value if isinstance(w.workflow_type, WorkflowType) else str(w.workflow_type), 100)
+        ts = w.created_at.timestamp() if w.created_at else 0
+        return (order, -ts)
+
+    return sorted(workflows, key=sort_key)
 
 
 async def get_workflow(db: AsyncSession, workflow_id: str) -> Workflow | None:

@@ -767,6 +767,17 @@ function ChannelConfigForm({
             </div>
           </div>
           <div>
+            <label className="block text-sm font-medium mb-1">邮件模板</label>
+            <select
+              value={config.template || "email"}
+              onChange={(e) => set("template", e.target.value)}
+              className="w-full px-3 py-2 border rounded-md text-sm"
+            >
+              <option value="email">默认模板（世界模型与具身智能）</option>
+            </select>
+            <p className="text-xs text-gray-400 mt-1">在 apps/api/templates/ 目录下创建自定义 HTML 模板文件</p>
+          </div>
+          <div>
             <label className="block text-sm font-medium mb-1">收件人邮箱 *</label>
             <input
               type="text" required
