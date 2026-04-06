@@ -91,6 +91,14 @@ async def update_article(db: AsyncSession, article_id: str, data: ArticleUpdate)
     return article
 
 
+async def create_event(db: AsyncSession, data: dict) -> CuratedEvent:
+    event = CuratedEvent(**data)
+    db.add(event)
+    await db.commit()
+    await db.refresh(event)
+    return event
+
+
 async def get_events(
     db: AsyncSession,
     skip: int = 0,

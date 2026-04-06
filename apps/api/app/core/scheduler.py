@@ -23,6 +23,7 @@ from app.models.article import RawArticle
 from app.models.digest import DailyDigest
 from app.models.llm_provider import LlmProvider
 from app.models.rss_feed import RssFeed
+from app.models.event import CuratedEvent
 from app.core.security import decrypt_api_key
 from app.services.rss_service import parse_feed
 
@@ -383,6 +384,27 @@ async def do_classify_articles(workflow_id: str) -> dict:
                         if provider:
                             article.llm_provider_id = provider.id
                             article.llm_model = provider.default_model
+
+                        # Auto-create CuratedEvent from classification results
+                        event_type = classification.get("event_type")
+                        companies = classification.get("companies", [])
+                        if event_type or companies:
+                            existing_result = await session.execute(
+                                select(CuratedEvent).where(CuratedEvent.article_id == article.id)
+                            )
+                            if not existing_result.scalar_one_or_none():
+                                companies_to_use = companies if companies else [None]
+                                for company in companies_to_use[:5]:  # limit to 5 events per article
+                                    event = CuratedEvent(
+                                        id=str(uuid.uuid4()),
+                                        article_id=article.id,
+                                        company_name=company,
+                                        event_type=event_type,
+                                        importance=classification.get("relevance_score", 3),
+                                        one_line_summary=classification.get("summary_short", ""),
+                                        event_date=article.publish_time,
+                                    )
+                                    session.add(event)
 
                         return True, None
                     except asyncio.TimeoutError:

@@ -93,6 +93,73 @@ async def list_events(
     return events
 
 
+@router.post("/events", response_model=EventResponse)
+async def create_event(data: EventUpdate, db: AsyncSession = Depends(get_db)):
+    event_data = data.model_dump(exclude_unset=True)
+    event_data.setdefault("importance", 3)
+    event_data.setdefault("included_in_digest", False)
+    event_data.setdefault("event_date", datetime.now())
+    event = await article_service.create_event(db, event_data)
+    return event
+
+
+@router.delete("/events/{event_id}")
+async def delete_event(event_id: str, db: AsyncSession = Depends(get_db)):
+    event = await article_service.get_event(db, event_id)
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+    await db.delete(event)
+    await db.commit()
+    return {"message": "Deleted"}
+
+
+@router.post("/events/migrate-from-articles")
+async def migrate_events_from_articles(db: AsyncSession = Depends(get_db)):
+    """One-time migration: create CuratedEvent records from already-classified articles."""
+    import uuid
+    from app.models.article import RawArticle
+    from app.models.event import CuratedEvent
+    from sqlalchemy import select, func
+
+    # Get classified articles that have event_type or companies
+    result = await db.execute(
+        select(RawArticle).where(
+            RawArticle.status == "classified",
+            (RawArticle.primary_event_type.isnot(None)) | (RawArticle.companies_json.isnot(None)),
+        )
+    )
+    articles = result.scalars().all()
+
+    created_count = 0
+    for article in articles:
+        # Check if event already exists for this article
+        existing = await db.execute(
+            select(CuratedEvent).where(CuratedEvent.article_id == article.id)
+        )
+        if existing.scalar_one_or_none():
+            continue
+
+        event_type = article.primary_event_type
+        companies = article.companies_json or []
+        companies_to_use = companies if companies else [None]
+
+        for company in companies_to_use[:5]:
+            event = CuratedEvent(
+                id=str(uuid.uuid4()),
+                article_id=article.id,
+                company_name=company,
+                event_type=event_type,
+                importance=article.relevance_score or 3,
+                one_line_summary=article.summary_short or "",
+                event_date=article.publish_time,
+            )
+            db.add(event)
+            created_count += 1
+
+    await db.commit()
+    return {"message": f"Created {created_count} events from {len(articles)} articles"}
+
+
 @router.patch("/events/{event_id}", response_model=EventResponse)
 async def update_event(
     event_id: str, data: EventUpdate, db: AsyncSession = Depends(get_db)
