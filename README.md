@@ -125,6 +125,12 @@ docker compose up -d
 - **飞书** — 通过群机器人 Webhook 推送
 - **邮件** — 通过 SMTP 发送 HTML 格式邮件
 
+## 详细文档
+
+README 仅涵盖快速入门和基础配置。如需深入了解系统架构、工作流执行逻辑、Prompt 和邮件模板的自定义方法、推送系统配置等，请阅读：
+
+- **[详细指南](docs/DETAILED_GUIDE.md)** — 系统架构、数据模型、工作流详解、Prompt 配置、邮件模板、推送系统
+
 ## 项目结构
 
 ```
@@ -197,9 +203,11 @@ Prompt 文件位于 `apps/api/prompts/` 目录：
 | `email.template.html` | 邮件 HTML 模板（通用） |
 | `email.html` | 邮件实际模板（如存在则优先使用） |
 
-**使用方式**：复制 `.template.html` 文件并重命名为 `.html`，然后修改其中的 HTML 内容。模板中使用 `{{variable}}` 作为占位符。
+**使用方式**：复制 `.template.html` 文件并重命名为 `.html`，然后修改其中的 HTML 内容。模板中使用 `${variable}` 作为占位符。
 
 > 注意：自定义的 `.json` 和 `.html` 文件不会被 git 跟踪，方便不同用户各自维护。
+>
+> 关于 Prompt 和邮件模板的详细修改指南，请参见 [详细指南](docs/DETAILED_GUIDE.md) 第 4 章和第 5 章。
 
 ## 环境变量
 

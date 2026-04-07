@@ -401,11 +401,9 @@ def _build_html_digest(content_markdown: str, digest_date: str, item_count: int,
     # Load email template and substitute variables
     template = load_template(template_name)
     return template.substitute(
-        newsletter_title="世界模型与具身智能",
         digest_date=digest_date,
         item_count=str(item_count),
         topic_count=str(topic_count),
         source_count=str(len(sources)),
         content_html=content_html,
-        footer_text="忆生科技PR团队",
     )
