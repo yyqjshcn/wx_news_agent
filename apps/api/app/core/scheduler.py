@@ -847,51 +847,54 @@ async def do_generate_digest(workflow_id: str) -> dict:
         # Use Beijing time (Asia/Shanghai, UTC+8) for digest date calculation
         beijing_tz = timezone(timedelta(hours=8))
         now_beijing = datetime.now(beijing_tz)
-        today = now_beijing.replace(hour=0, minute=0, second=0, microsecond=0)
-        tomorrow = today + timedelta(days=1)
-        yesterday = today - timedelta(days=1)
+        digest_date = now_beijing.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        # Sliding window: "today" = last 24 hours, "yesterday" = 24-48 hours ago
+        window_end = now_beijing
+        window_24h = now_beijing - timedelta(hours=24)
+        window_48h = now_beijing - timedelta(hours=48)
 
         # Query strategy: prioritize relevant articles (is_relevant == True),
         # only fall back to all articles if no relevant ones exist for the date range.
         # This ensures the daily digest focuses on embodied AI and world model topics.
 
-        # Try today's relevant articles first
+        # Try last 24h relevant articles first
         result = await session.execute(
             select(RawArticle).where(
-                RawArticle.created_at >= today,
-                RawArticle.created_at < tomorrow,
+                RawArticle.created_at >= window_24h,
+                RawArticle.created_at < window_end,
                 RawArticle.is_relevant == True,
             ).order_by(RawArticle.publish_time.desc())
         )
         articles = result.scalars().all()
 
-        # If no relevant articles today, try yesterday's relevant ones
+        # If no relevant articles in last 24h, try 24-48h relevant ones
         if not articles:
             result = await session.execute(
                 select(RawArticle).where(
-                    RawArticle.created_at >= yesterday,
-                    RawArticle.created_at < today,
+                    RawArticle.created_at >= window_48h,
+                    RawArticle.created_at < window_24h,
                     RawArticle.is_relevant == True,
                 ).order_by(RawArticle.publish_time.desc())
             )
             articles = result.scalars().all()
 
-        # If still no relevant articles, try all articles from today
+        # If still no relevant articles, try all articles from last 24h
         if not articles:
             result = await session.execute(
                 select(RawArticle).where(
-                    RawArticle.created_at >= today,
-                    RawArticle.created_at < tomorrow,
+                    RawArticle.created_at >= window_24h,
+                    RawArticle.created_at < window_end,
                 ).order_by(RawArticle.publish_time.desc()).limit(30)
             )
             articles = result.scalars().all()
 
-        # Last resort: all articles from yesterday
+        # Last resort: all articles from 24-48h
         if not articles:
             result = await session.execute(
                 select(RawArticle).where(
-                    RawArticle.created_at >= yesterday,
-                    RawArticle.created_at < today,
+                    RawArticle.created_at >= window_48h,
+                    RawArticle.created_at < window_24h,
                 ).order_by(RawArticle.publish_time.desc()).limit(30)
             )
             articles = result.scalars().all()
@@ -918,7 +921,7 @@ async def do_generate_digest(workflow_id: str) -> dict:
             content_md += f"\n\n> **注意**: 本次摘要包含 {len(non_relevant)} 篇未标记为具身智能/世界模型相关的文章，仅供参考。"
 
         result = await session.execute(
-            select(DailyDigest).where(DailyDigest.digest_date == today)
+            select(DailyDigest).where(DailyDigest.digest_date == digest_date)
         )
         existing = result.scalar_one_or_none()
 
@@ -934,7 +937,7 @@ async def do_generate_digest(workflow_id: str) -> dict:
         else:
             digest = DailyDigest(
                 id=str(uuid.uuid4()),
-                digest_date=today,
+                digest_date=digest_date,
                 content_markdown=content_md,
                 item_count=len(articles),
                 status="published",
@@ -949,7 +952,7 @@ async def do_generate_digest(workflow_id: str) -> dict:
 
         return {
             "workflow_id": workflow_id,
-            "digest_date": today.strftime("%Y-%m-%d"),
+            "digest_date": digest_date.strftime("%Y-%m-%d"),
             "item_count": len(articles),
             "digest_id": digest.id,
             "used_llm": digest_provider is not None,

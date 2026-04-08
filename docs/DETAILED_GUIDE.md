@@ -797,16 +797,19 @@ schedule_workflow_run() → asyncio.create_task()
 开始
   │
   ▼
-1. 计算日期范围（北京时间 UTC+8）：
-   today, yesterday, tomorrow
+1. 计算时间窗口（北京时间 UTC+8）：
+   window_end = 当前时刻
+   window_24h = 当前时刻 - 24小时
+   window_48h = 当前时刻 - 48小时
+   digest_date = 触发当天日期（零点）
   │
   ▼
 2. 文章选择（级联回退策略）：
    │
-   ├── 优先：today 的 is_relevant=True 的文章
-   ├── 若无 → yesterday 的 is_relevant=True 的文章
-   ├── 若无 → today 的全部文章（最多 30 篇）
-   └── 若无 → yesterday 的全部文章（最多 30 篇）
+   ├── 优先：近24h内（window_24h ~ window_end）is_relevant=True 的文章
+   ├── 若无 → 24-48h内（window_48h ~ window_24h）is_relevant=True 的文章
+   ├── 若无 → 近24h内的全部文章（最多 30 篇）
+   └── 若无 → 24-48h内的全部文章（最多 30 篇）
   │
   ▼
 3. 查找摘要用 LLM 提供商：
