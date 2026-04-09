@@ -52,7 +52,7 @@ async def _send_feishu(channel, content, digest_date, item_count):
             "template": "blue",
         },
         "elements": [
-            {"tag": "markdown", "content": f"**📅 日期**: {digest_date}  |  **📊 文章数**: {item_count} 篇\n\n---"},
+            {"tag": "markdown", "content": f"**📅 日期**: {digest_date}  |  **📊 事件数**: {item_count} 个\n\n---"},
             {"tag": "markdown", "content": card_content},
         ],
     }
@@ -84,7 +84,7 @@ async def _send_wechat_work(channel, content, digest_date, item_count):
 
     # Convert markdown to plain text for WeChat Work
     text_content = _markdown_to_plain_text(content)
-    header = f"📅 {digest_date} | 📊 {item_count} 篇\n\n"
+    header = f"📅 {digest_date} | 📊 {item_count} 个事件\n\n"
 
     payload = {
         "msgtype": "markdown",
@@ -125,7 +125,7 @@ async def _send_dingtalk(channel, content, digest_date, item_count):
         final_url = f"{webhook_url}&timestamp={timestamp}&sign={sign}"
 
     text_content = _markdown_to_plain_text(content)
-    header = f"**📅 日期**: {digest_date}  |  **📊 文章数**: {item_count} 篇\n\n---\n\n"
+    header = f"**📅 日期**: {digest_date}  |  **📊 事件数**: {item_count} 个\n\n---\n\n"
 
     payload = {
         "msgtype": "markdown",
@@ -152,7 +152,7 @@ async def _send_slack(channel, content, digest_date, item_count):
     channel_name = cfg.get("channel", "")
 
     text_content = _markdown_to_plain_text(content)
-    header = f"📅 {digest_date} | 📊 {item_count} 篇"
+    header = f"📅 {digest_date} | 📊 {item_count} 个事件"
 
     blocks = [
         {"type": "header", "text": {"type": "plain_text", "text": cfg.get("message_title", "每日摘要")}},
@@ -180,7 +180,7 @@ async def _send_discord(channel, content, digest_date, item_count):
     webhook_url = cfg.get("webhook_url", "")
 
     text_content = _markdown_to_plain_text(content)
-    header = f"📅 {digest_date} | 📊 {item_count} 篇"
+    header = f"📅 {digest_date} | 📊 {item_count} 个事件"
 
     payload = {
         "embeds": [{
@@ -287,6 +287,7 @@ async def _send_email(channel, content, digest_date, item_count):
 
 def _convert_markdown_to_feishu(text: str) -> str:
     import re
+    text = _strip_digest_header(text)
     lines = text.split("\n")
     result = []
     for line in lines:
@@ -313,11 +314,42 @@ def _convert_markdown_to_feishu(text: str) -> str:
 
 def _markdown_to_plain_text(text: str) -> str:
     import re
+    text = _strip_digest_header(text)
     text = re.sub(r'\[(.+?)\]\(.+?\)', r'\1', text)
     text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
     text = re.sub(r'\*(.+?)\*', r'\1', text)
     text = re.sub(r'#{1,6}\s*', '', text)
     return text
+
+
+def _strip_digest_header(text: str) -> str:
+    lines = text.split("\n")
+    skip_until_separator = False
+    found_separator = False
+    result = []
+
+    for line in lines:
+        stripped = line.strip()
+
+        if not found_separator:
+            if stripped.startswith("# 每日摘要") or stripped.startswith("# "):
+                skip_until_separator = True
+                continue
+            if skip_until_separator and stripped.startswith("---"):
+                found_separator = True
+                continue
+            if skip_until_separator:
+                continue
+            if not skip_until_separator and stripped.startswith("# "):
+                skip_until_separator = True
+                continue
+
+        result.append(line)
+
+    if not found_separator:
+        return "\n".join(result)
+
+    return "\n".join(result).lstrip("\n")
 
 
 def _build_html_digest(content_markdown: str, digest_date: str, item_count: int, template_name: str = "email") -> str:

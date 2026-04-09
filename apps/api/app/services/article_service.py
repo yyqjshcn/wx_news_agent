@@ -1,13 +1,14 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select, func
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.article import RawArticle
-from app.models.event import CuratedEvent
+from app.models.event import ArticleEvent, Event
 from app.models.digest import DailyDigest
 from app.models.system_log import SystemLog
 from app.schemas.article import ArticleUpdate
+from app.services import event_service
 
 
 async def get_articles(
@@ -23,14 +24,24 @@ async def get_articles(
     end_date: datetime | None = None,
 ) -> list[RawArticle]:
     query = select(RawArticle)
+    if event_type:
+        query = (
+            query.outerjoin(ArticleEvent, ArticleEvent.article_id == RawArticle.id)
+            .outerjoin(Event, Event.id == ArticleEvent.event_id)
+            .where(
+                or_(
+                    RawArticle.primary_event_type == event_type,
+                    Event.event_type == event_type,
+                )
+            )
+            .distinct()
+        )
     if account_name:
         query = query.where(RawArticle.account_name == account_name)
     if status:
         query = query.where(RawArticle.status == status)
     if is_relevant is not None:
         query = query.where(RawArticle.is_relevant == is_relevant)
-    if event_type:
-        query = query.where(RawArticle.primary_event_type == event_type)
     if source_type:
         query = query.where(RawArticle.source_type == source_type)
     if start_date:
@@ -52,15 +63,24 @@ async def count_articles(
     start_date: datetime | None = None,
     end_date: datetime | None = None,
 ) -> int:
-    query = select(func.count(RawArticle.id))
+    query = select(func.count(func.distinct(RawArticle.id)))
+    if event_type:
+        query = (
+            query.outerjoin(ArticleEvent, ArticleEvent.article_id == RawArticle.id)
+            .outerjoin(Event, Event.id == ArticleEvent.event_id)
+            .where(
+                or_(
+                    RawArticle.primary_event_type == event_type,
+                    Event.event_type == event_type,
+                )
+            )
+        )
     if account_name:
         query = query.where(RawArticle.account_name == account_name)
     if status:
         query = query.where(RawArticle.status == status)
     if is_relevant is not None:
         query = query.where(RawArticle.is_relevant == is_relevant)
-    if event_type:
-        query = query.where(RawArticle.primary_event_type == event_type)
     if source_type:
         query = query.where(RawArticle.source_type == source_type)
     if start_date:
@@ -91,48 +111,38 @@ async def update_article(db: AsyncSession, article_id: str, data: ArticleUpdate)
     return article
 
 
-async def create_event(db: AsyncSession, data: dict) -> CuratedEvent:
-    event = CuratedEvent(**data)
-    db.add(event)
-    await db.commit()
-    await db.refresh(event)
-    return event
+async def serialize_articles(db: AsyncSession, articles: list[RawArticle]) -> list[dict]:
+    linked_events = await event_service.get_events_for_articles(db, [article.id for article in articles])
+    return [
+        {
+            "id": article.id,
+            "article_url": article.article_url,
+            "title": article.title,
+            "account_name": article.account_name,
+            "source_type": article.source_type,
+            "publish_time": article.publish_time,
+            "author": article.author,
+            "status": article.status,
+            "is_relevant": article.is_relevant,
+            "relevance_score": article.relevance_score,
+            "primary_event_type": article.primary_event_type,
+            "tags_json": article.tags_json or [],
+            "companies_json": article.companies_json or [],
+            "summary_short": article.summary_short,
+            "summary_long": article.summary_long,
+            "linked_events": linked_events.get(article.id, []),
+            "created_at": article.created_at,
+            "updated_at": article.updated_at,
+        }
+        for article in articles
+    ]
 
 
-async def get_events(
-    db: AsyncSession,
-    skip: int = 0,
-    limit: int = 50,
-    event_type: str | None = None,
-    included_in_digest: bool | None = None,
-) -> list[CuratedEvent]:
-    query = select(CuratedEvent)
-    if event_type:
-        query = query.where(CuratedEvent.event_type == event_type)
-    if included_in_digest is not None:
-        query = query.where(CuratedEvent.included_in_digest == included_in_digest)
-    query = query.order_by(CuratedEvent.event_date.desc()).offset(skip).limit(limit)
-    result = await db.execute(query)
-    return result.scalars().all()
-
-
-async def get_event(db: AsyncSession, event_id: str) -> CuratedEvent | None:
-    result = await db.execute(select(CuratedEvent).where(CuratedEvent.id == event_id))
-    return result.scalar_one_or_none()
-
-
-async def update_event(db: AsyncSession, event_id: str, data: dict) -> CuratedEvent | None:
-    event = await get_event(db, event_id)
-    if not event:
+async def serialize_article(db: AsyncSession, article: RawArticle | None) -> dict | None:
+    if not article:
         return None
-    for key, value in data.items():
-        if value is not None:
-            setattr(event, key, value)
-    event.updated_at = datetime.now(timezone.utc)
-    db.add(event)
-    await db.commit()
-    await db.refresh(event)
-    return event
+    serialized = await serialize_articles(db, [article])
+    return serialized[0]
 
 
 async def get_digests(
@@ -199,11 +209,11 @@ async def create_log(db: AsyncSession, level: str, module: str, message: str, pa
 async def get_dashboard_stats(db: AsyncSession) -> dict:
     total_articles = (await db.execute(select(func.count(RawArticle.id)))).scalar() or 0
     relevant_articles = (await db.execute(select(func.count(RawArticle.id)).where(RawArticle.is_relevant == True))).scalar() or 0
-    total_events = (await db.execute(select(func.count(CuratedEvent.id)))).scalar() or 0
+    total_events = (await db.execute(select(func.count(Event.id)))).scalar() or 0
     total_digests = (await db.execute(select(func.count(DailyDigest.id)))).scalar() or 0
     today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     today_articles = (await db.execute(select(func.count(RawArticle.id)).where(RawArticle.created_at >= today))).scalar() or 0
-    today_events = (await db.execute(select(func.count(CuratedEvent.id)).where(CuratedEvent.created_at >= today))).scalar() or 0
+    today_events = (await db.execute(select(func.count(Event.id)).where(Event.created_at >= today))).scalar() or 0
     return {
         "total_articles": total_articles,
         "relevant_articles": relevant_articles,

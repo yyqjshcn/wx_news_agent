@@ -308,7 +308,7 @@ apps/api/
 | `digest_date` | DateTime(tz) | — | 摘要日期 |
 | `content_markdown` | Text | — | Markdown 格式内容 |
 | `content_html` | Text | — | HTML 格式内容 |
-| `item_count` | Integer | `0` | 文章数量 |
+| `item_count` | Integer | `0` | 本次摘要纳入的事件数量 |
 | `status` | String | `"draft"` | 状态：`draft` → `published` → `sent` |
 | `llm_provider_id` | String | — | 使用的 LLM 提供商 ID |
 | `llm_model` | String | — | 使用的模型名称 |
@@ -797,19 +797,42 @@ schedule_workflow_run() → asyncio.create_task()
 开始
   │
   ▼
-1. 计算时间窗口（北京时间 UTC+8）：
-   window_end = 当前时刻
-   window_24h = 当前时刻 - 24小时
-   window_48h = 当前时刻 - 48小时
-   digest_date = 触发当天日期（零点）
+1. 计算摘要日期与时间窗口（北京时间 UTC+8）：
+   now_beijing = 当前北京时间
+   digest_date = 当天日期零点
+   window_24h = now_beijing - 24小时
+   window_48h = now_beijing - 48小时
   │
   ▼
-2. 文章选择（级联回退策略）：
+2. 事件选择（三阶段级联策略）：
    │
-   ├── 优先：近24h内（window_24h ~ window_end）is_relevant=True 的文章
-   ├── 若无 → 24-48h内（window_48h ~ window_24h）is_relevant=True 的文章
-   ├── 若无 → 近24h内的全部文章（最多 30 篇）
-   └── 若无 → 24-48h内的全部文章（最多 30 篇）
+   ├── 阶段 1：选择过去 24 小时内有新文章发布的相关事件
+   │         条件：
+   │         - `Event.status = "active"`
+   │         - 存在关联文章 `RawArticle`
+   │         - 文章 `publish_time` 落在 `[window_24h, now_beijing]`
+   │         - 文章 `is_relevant = true`
+   │         排序：
+   │         - 命中窗口内最新文章发布时间 DESC
+   │         - `importance DESC`
+   │         - `updated_at DESC`
+   │         不设置事件数量上限
+   │
+   ├── 若阶段 1 为空 → 阶段 2：选择 24-48 小时内有新文章发布的相关事件
+   │         条件：
+   │         - `Event.status = "active"`
+   │         - 存在关联文章 `RawArticle`
+   │         - 文章 `publish_time` 落在 `[window_48h, window_24h)`
+   │         - 文章 `is_relevant = true`
+   │         排序同阶段 1
+   │         不设置事件数量上限
+   │
+   └── 若阶段 2 也为空 → 阶段 3：回退到优先级规则
+             - 选择全部 `status="active"` 的事件
+             - 优先 `included_in_digest = true`
+             - 再按 `importance DESC`
+             - 再按 `coalesce(event_date_end, updated_at) DESC`
+             - 最多取 30 个事件
   │
   ▼
 3. 查找摘要用 LLM 提供商：
@@ -817,22 +840,58 @@ schedule_workflow_run() → asyncio.create_task()
    备选：任意 enabled=True 的提供商
   │
   ▼
-4. 生成内容 _generate_digest_content(articles, provider):
+4. 序列化事件：
    │
-   ├── 若无文章：
-   │   返回 "# 每日摘要\n\n今日暂无相关文章。"
+   ├── 加载事件参与方 `EventEntity`
+   ├── 加载事件关联文章 `ArticleEvent + RawArticle`
+   ├── 文章按 `publish_time DESC, created_at DESC` 排序
+   ├── `representative_articles` = 前 3 篇文章
+   └── `related_articles` = 该事件的全部关联文章
+  │
+  ▼
+5. 选择输入给大模型的文章材料：
+   │
+   ├── 为每个入选事件构建候选文章列表
+   ├── 单篇文章内容优先级：
+   │   `summary_long` → `summary_short` → 标题
+   ├── 单篇文章选择优先级：
+   │   - 优先命中当前筛选窗口的文章
+   │   - 优先有 `summary_long`
+   │   - 再按 `publish_time DESC`
+   │   - 再按 `relevance_score DESC`
+   ├── 先为每个事件分配 1 篇文章
+   └── 再从剩余文章中补齐，总数最多 30 篇
+  │
+  ▼
+6. 生成内容 _generate_digest_content(events, provider):
+   │
+   ├── 若无事件：
+   │   返回 "# 每日摘要\n\n今日暂无事件。"
    │
    ├── 若有提供商：
    │   │
-   │   ├── 取前 20 篇文章
+   │   ├── 构建全部入选事件的“事件概览块”
+   │   │   包含：
+   │   │   - 事件标题
+   │   │   - 事件类型
+   │   │   - 参与方
+   │   │   - 事件摘要（优先 `summary_long`）
+   │   │   - 命中窗口内的最新文章时间
+   │   │   - 关联文章数
    │   │
-   │   ├── 构建文章摘要列表（标题、链接、来源、short summary）
+   │   ├── 构建最多 30 篇文章的“补充材料块”
+   │   │   包含：
+   │   │   - 文章标题
+   │   │   - 所属事件
+   │   │   - 来源
+   │   │   - 发布时间
+   │   │   - 文章摘要内容
    │   │
    │   ├── 加载 Prompt：load_prompt("digest")
    │   │   优先读取 digest.json，否则 digest.template.json
    │   │
    │   ├── 填充 Prompt 变量：
-   │   │   {article_count}, {top_count}, {focus_area}, {articles}
+   │   │   {event_count}, {article_count}, {focus_area}, {events}, {articles}
    │   │
    │   ├── 调用 LLM（同步）：
    │   │   POST {base_url}/chat/completions
@@ -841,24 +900,22 @@ schedule_workflow_run() → asyncio.create_task()
    │   ├── 修复 Markdown 标题格式
    │   │
    │   └── 组装最终内容：
-   │       header（标题、日期、文章数）+ LLM 内容 + footer（模型名）
+   │       header（标题、日期、事件数）+ LLM 内容 + footer（模型名）
    │
    └── 若无提供商或 LLM 失败：
-       按公众号分组，列出文章链接和 short summary
+       按 `event_type` 分组，列出事件标题、事件 short summary 与代表文章链接
   │
   ▼
-5. 若包含非相关文章，添加说明注释
-  │
-  ▼
-6. Upsert DailyDigest：
+7. Upsert DailyDigest：
    若当天已存在 → 更新 content_markdown 和 item_count
    若不存在 → 创建新记录
+   `item_count = len(events)`，表示本次摘要使用的事件数量
   │
   ▼
-7. 返回运行摘要：
+8. 返回运行摘要：
    {
      "digest_date": 摘要日期,
-     "article_count": 使用的文章数,
+     "item_count": 使用的事件数,
      "llm_provider": 使用的提供商,
      "llm_model": 使用的模型
    }
@@ -868,7 +925,10 @@ schedule_workflow_run() → asyncio.create_task()
 
 | 操作 | 模型 | 说明 |
 |---|---|---|
-| 读取 | `RawArticle` | 按日期和相关性查询文章 |
+| 读取 | `Event` | 按三阶段策略查询事件 |
+| 读取 | `EventEntity` | 加载事件参与方 |
+| 读取 | `ArticleEvent` | 加载事件-文章关联 |
+| 读取 | `RawArticle` | 读取事件下的代表文章和相关文章 |
 | 读取 | `LlmProvider` | 获取摘要用 LLM 配置 |
 | 写入 | `DailyDigest` | Upsert 每日摘要 |
 
@@ -876,7 +936,9 @@ schedule_workflow_run() → asyncio.create_task()
 
 - **Prompt 文件：** `digest.json` 或 `digest.template.json`
 - **每次工作流执行最多一次调用**
-- **输入文章数：** 最多 20 篇
+- **输入事件数：** 不设上限（全部入选事件都进入 Prompt）
+- **补充文章材料：** 最多 30 篇
+- **单篇文章内容优先级：** `summary_long` → `summary_short` → 标题
 - **最大 token：** 4000
 - **超时：** 120 秒
 - **同步调用**（使用 httpx 同步客户端）
@@ -1046,7 +1108,7 @@ LLM 必须返回合法的 JSON 对象，不包含任何 Markdown 标记或额外
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `system_prompt` | String | 系统级提示词，定义编辑角色 |
-| `user_prompt_template` | String | 用户提示词模板，包含 `{article_count}`、`{top_count}`、`{focus_area}`、`{articles}` 四个占位符 |
+| `user_prompt_template` | String | 用户提示词模板，包含 `{event_count}`、`{article_count}`、`{focus_area}`、`{events}`、`{articles}` 五个占位符 |
 | `focus_area` | String | 关注领域描述，会注入到模板中 |
 | `max_tokens` | Integer | LLM 响应的最大 token 数 |
 | `timeout` | Integer | 请求超时时间（秒） |
@@ -1055,14 +1117,15 @@ LLM 必须返回合法的 JSON 对象，不包含任何 Markdown 标记或额外
 
 | 占位符 | 运行时替换为 |
 |---|---|
-| `{article_count}` | 当日文章总数 |
-| `{top_count}` | 选取的最重要文章数（最多 20） |
+| `{event_count}` | 本次摘要纳入的事件总数 |
+| `{article_count}` | 补充文章材料数量（最多 30） |
 | `{focus_area}` | `focus_area` 字段的值 |
-| `{articles}` | 格式化后的文章列表（标题、链接、来源、摘要） |
+| `{events}` | 格式化后的事件概览列表（标题、类型、参与方、事件摘要、最新相关文章时间、关联文章数） |
+| `{articles}` | 格式化后的补充文章材料列表（标题、所属事件、来源、发布时间、文章摘要） |
 
 #### 期望的 LLM 输出格式
 
-LLM 返回 Markdown 格式的每日摘要：
+LLM 返回 Markdown 格式的每日摘要，要求覆盖全部输入事件：
 
 ```markdown
 ## 概述
@@ -1071,8 +1134,7 @@ LLM 返回 Markdown 格式的每日摘要：
 
 ## 融资动态
 
-- [文章标题 1](https://...) — 来源公众号
-- [文章标题 2](https://...) — 来源公众号
+这里总结该主题下的聚合事件，并在事件下附带 1-3 条相关文章链接。
 
 ## 技术突破
 

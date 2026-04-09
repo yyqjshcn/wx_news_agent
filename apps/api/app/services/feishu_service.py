@@ -60,8 +60,8 @@ def _convert_markdown_to_feishu(text: str) -> str:
     Feishu card markdown only supports: **bold**, *italic*, ~~strikethrough~~,
     [link](url), `inline_code`, and lists. It does NOT support # headings.
 
-    Also strips the digest header block (# 每日摘要, **日期**, **共 xx 篇文章**, ---)
-    since the card header already shows the title, date and article count.
+    Also strips the digest header block (# 每日摘要, **日期**, **共 xx 个事件**, ---)
+    since the card header already shows the title, date and event count.
     """
     text = _strip_digest_header(text)
 
@@ -106,7 +106,7 @@ def _strip_digest_header(text: str) -> str:
     (blank)
     **日期**: 2026-04-02
     (blank)
-    **共 52 篇文章**
+    **共 52 个事件**
     (blank)
     ---
     """
@@ -152,7 +152,7 @@ def _build_feishu_card(
 
     elements.append({
         "tag": "markdown",
-        "content": f"**📅 日期**: {digest_date}  |  **📊 文章数**: {item_count} 篇\n\n---",
+        "content": f"**📅 日期**: {digest_date}  |  **📊 事件数**: {item_count} 个\n\n---",
     })
 
     elements.append({

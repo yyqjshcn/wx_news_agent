@@ -23,7 +23,7 @@ def _build_html_digest(content_markdown: str, digest_date: str, item_count: int)
     html_parts.append(
         f'<div style="background: #f8f9fa; padding: 16px 20px; border-radius: 8px; margin-bottom: 24px;">'
         f'<span style="font-size: 14px; color: #666;">📅 日期: {digest_date}</span>'
-        f'<span style="margin-left: 20px; font-size: 14px; color: #666;">📊 文章数: {item_count} 篇</span>'
+        f'<span style="margin-left: 20px; font-size: 14px; color: #666;">📊 事件数: {item_count} 个</span>'
         f'</div>'
     )
 

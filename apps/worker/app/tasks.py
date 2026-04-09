@@ -1,9 +1,19 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import logging
+import re
 
 from app.core.security import decrypt_api_key
 from app.db import get_session
-from app.models import WorkflowRunStatus, get_workflow, get_workflow_run, LlmProvider
+from app.models import (
+    WorkflowRunStatus,
+    get_workflow,
+    get_workflow_run,
+    LlmProvider,
+    Event,
+    EventEntity,
+    ArticleEvent,
+    RawArticle,
+)
 from app.worker import celery_app
 
 logger = logging.getLogger(__name__)
@@ -269,51 +279,308 @@ def _fetch_articles_from_adapter(fakeid: str, count: int = 20) -> list:
     return data.get("list", data.get("articles", []))
 
 
+_MIN_DATETIME_UTC = datetime.min.replace(tzinfo=timezone.utc)
+_DIGEST_EVENT_SUMMARY_LIMIT = 320
+_DIGEST_ARTICLE_CONTENT_LIMIT = 480
+
+
+def _coerce_datetime(value):
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    return None
+
+
+def _clip_text(text: str | None, limit: int) -> str:
+    if not text:
+        return ""
+    value = text.strip()
+    if len(value) <= limit:
+        return value
+    return value[: max(limit - 1, 0)].rstrip() + "…"
+
+
+def _article_datetime(article: RawArticle):
+    return _coerce_datetime(article.publish_time or article.created_at)
+
+
+def _matches_window(dt, *, window_start, window_end, window_end_inclusive=True):
+    dt = _coerce_datetime(dt)
+    if dt is None or window_start is None or window_end is None:
+        return False
+    if dt < window_start:
+        return False
+    if window_end_inclusive:
+        return dt <= window_end
+    return dt < window_end
+
+
+def _build_digest_article_payload(article: RawArticle, *, event_id: str, event_title: str, window_start=None, window_end=None, window_end_inclusive=True):
+    published_at = _article_datetime(article)
+    summary_long = (article.summary_long or "").strip()
+    summary_short = (article.summary_short or "").strip()
+    content_text = summary_long or summary_short or (article.title or "").strip()
+    return {
+        "id": article.id,
+        "event_id": event_id,
+        "event_title": event_title,
+        "title": article.title,
+        "article_url": article.article_url,
+        "account_name": article.account_name,
+        "publish_time": published_at,
+        "summary_long": summary_long,
+        "summary_short": summary_short,
+        "content_text": _clip_text(content_text, _DIGEST_ARTICLE_CONTENT_LIMIT),
+        "has_summary_long": bool(summary_long),
+        "is_relevant": bool(article.is_relevant),
+        "relevance_score": float(article.relevance_score or 0),
+        "in_window": _matches_window(
+            published_at,
+            window_start=window_start,
+            window_end=window_end,
+            window_end_inclusive=window_end_inclusive,
+        ),
+    }
+
+
+def _digest_article_sort_key(article: dict):
+    published_at = _coerce_datetime(article.get("publish_time")) or _MIN_DATETIME_UTC
+    return (
+        1 if article.get("in_window") else 0,
+        1 if article.get("is_relevant") else 0,
+        1 if article.get("has_summary_long") else 0,
+        published_at,
+        float(article.get("relevance_score") or 0),
+    )
+
+
+def _select_digest_articles(events: list[dict], max_articles: int = 30) -> list[dict]:
+    ranked_by_event = []
+    selected_ids = set()
+    selected = []
+
+    for event_index, event in enumerate(events):
+        digest_articles = event.get("digest_articles") or []
+        ranked = sorted(digest_articles, key=_digest_article_sort_key, reverse=True)
+        relevant_ranked = [article for article in ranked if article.get("is_relevant")]
+        if relevant_ranked:
+            ranked = relevant_ranked + [article for article in ranked if not article.get("is_relevant")]
+        ranked_by_event.append((event_index, event["id"], event["title"], ranked))
+
+    for _, event_id, event_title, ranked in ranked_by_event:
+        if len(selected) >= max_articles:
+            break
+        if not ranked:
+            continue
+        top_article = ranked[0]
+        if top_article["id"] in selected_ids:
+            continue
+        selected_ids.add(top_article["id"])
+        selected.append({**top_article, "event_id": event_id, "event_title": event_title})
+
+    remaining = []
+    for event_index, event_id, event_title, ranked in ranked_by_event:
+        for article in ranked:
+            if article["id"] in selected_ids:
+                continue
+            remaining.append((event_index, {**article, "event_id": event_id, "event_title": event_title}))
+
+    remaining.sort(key=lambda item: _digest_article_sort_key(item[1]), reverse=True)
+    for _, article in remaining:
+        if len(selected) >= max_articles:
+            break
+        if article["id"] in selected_ids:
+            continue
+        selected_ids.add(article["id"])
+        selected.append(article)
+
+    return selected
+
+
+def _select_recent_relevant_events(session, *, window_start, window_end, window_end_inclusive):
+    from sqlalchemy import select
+
+    publish_filters = [
+        RawArticle.publish_time.is_not(None),
+        RawArticle.publish_time >= window_start,
+    ]
+    if window_end_inclusive:
+        publish_filters.append(RawArticle.publish_time <= window_end)
+    else:
+        publish_filters.append(RawArticle.publish_time < window_end)
+
+    rows = session.execute(
+        select(Event, RawArticle)
+        .join(ArticleEvent, ArticleEvent.event_id == Event.id)
+        .join(RawArticle, RawArticle.id == ArticleEvent.article_id)
+        .where(
+            Event.status == "active",
+            RawArticle.is_relevant == True,
+            *publish_filters,
+        )
+        .order_by(RawArticle.publish_time.desc(), Event.importance.desc(), Event.updated_at.desc())
+    ).all()
+
+    grouped = {}
+    for event, article in rows:
+        article_time = _article_datetime(article)
+        if article_time is None:
+            continue
+        entry = grouped.setdefault(
+            event.id,
+            {"event": event, "latest_article_time": article_time},
+        )
+        if article_time > entry["latest_article_time"]:
+            entry["latest_article_time"] = article_time
+
+    ordered = sorted(
+        grouped.values(),
+        key=lambda item: (
+            item["latest_article_time"],
+            item["event"].importance or 0,
+            _coerce_datetime(item["event"].updated_at) or _MIN_DATETIME_UTC,
+        ),
+        reverse=True,
+    )
+    return [item["event"] for item in ordered], {
+        item["event"].id: item["latest_article_time"] for item in ordered
+    }
+
+
+def _select_fallback_digest_events(session, *, limit: int):
+    from sqlalchemy import func, select
+
+    return session.execute(
+        select(Event)
+        .where(Event.status == "active")
+        .order_by(
+            Event.included_in_digest.desc(),
+            Event.importance.desc(),
+            func.coalesce(Event.event_date_end, Event.updated_at).desc(),
+        )
+        .limit(limit)
+    ).scalars().all()
+
+
+def _serialize_digest_events(session, events: list[Event], *, window_start=None, window_end=None, window_end_inclusive=True, latest_matching_article_time=None) -> list[dict]:
+    from sqlalchemy import select
+
+    serialized = []
+    latest_matching_article_time = latest_matching_article_time or {}
+    for event in events:
+        entities = session.execute(
+            select(EventEntity).where(EventEntity.event_id == event.id).order_by(EventEntity.created_at.asc())
+        ).scalars().all()
+        articles = [
+            row[1]
+            for row in session.execute(
+                select(ArticleEvent, RawArticle)
+                .join(RawArticle, RawArticle.id == ArticleEvent.article_id)
+                .where(ArticleEvent.event_id == event.id)
+                .order_by(RawArticle.publish_time.desc(), RawArticle.created_at.desc())
+            ).all()
+        ]
+        serialized.append(
+            {
+                "id": event.id,
+                "title": event.title,
+                "event_type": event.event_type,
+                "summary_short": event.summary_short,
+                "summary_long": event.summary_long,
+                "importance": event.importance,
+                "article_count": len(articles),
+                "latest_article_time": max([_article_datetime(article) or _MIN_DATETIME_UTC for article in articles], default=None),
+                "selection_latest_article_time": latest_matching_article_time.get(event.id),
+                "entities": [{"name": entity.name} for entity in entities],
+                "representative_articles": [
+                    {
+                        "title": article.title,
+                        "article_url": article.article_url,
+                        "account_name": article.account_name,
+                    }
+                    for article in articles[:3]
+                ],
+                "related_articles": [
+                    {
+                        "title": article.title,
+                        "article_url": article.article_url,
+                        "account_name": article.account_name,
+                    }
+                    for article in articles
+                ],
+                "digest_articles": [
+                    _build_digest_article_payload(
+                        article,
+                        event_id=event.id,
+                        event_title=event.title,
+                        window_start=window_start,
+                        window_end=window_end,
+                        window_end_inclusive=window_end_inclusive,
+                    )
+                    for article in articles
+                ],
+            }
+        )
+    return serialized
+
+
+def _get_digest_candidate_events(session, now=None, fallback_limit: int = 30) -> list[dict]:
+    now = _coerce_datetime(now) or datetime.now(timezone.utc)
+    window_24h = now - timedelta(hours=24)
+    window_48h = now - timedelta(hours=48)
+
+    recent_events, recent_latest = _select_recent_relevant_events(
+        session,
+        window_start=window_24h,
+        window_end=now,
+        window_end_inclusive=True,
+    )
+    if recent_events:
+        return _serialize_digest_events(
+            session,
+            recent_events,
+            window_start=window_24h,
+            window_end=now,
+            window_end_inclusive=True,
+            latest_matching_article_time=recent_latest,
+        )
+
+    older_events, older_latest = _select_recent_relevant_events(
+        session,
+        window_start=window_48h,
+        window_end=window_24h,
+        window_end_inclusive=False,
+    )
+    if older_events:
+        return _serialize_digest_events(
+            session,
+            older_events,
+            window_start=window_48h,
+            window_end=window_24h,
+            window_end_inclusive=False,
+            latest_matching_article_time=older_latest,
+        )
+
+    fallback_events = _select_fallback_digest_events(session, limit=fallback_limit)
+    if not fallback_events:
+        return []
+    return _serialize_digest_events(session, fallback_events)
+
+
 def _do_generate_digest(workflow_id: str) -> dict:
-    import json
-    import httpx
-    from sqlalchemy import select, func
     from app.db import get_session
-    from app.models import RawArticle, DailyDigest, LlmProvider
-    from app.core.security import decrypt_api_key
+    from app.models import DailyDigest, LlmProvider
+    from sqlalchemy import select
 
     with get_session() as session:
-        today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        tomorrow = today + __import__("datetime").timedelta(days=1)
-        yesterday = today - __import__("datetime").timedelta(days=1)
+        beijing_tz = timezone(timedelta(hours=8))
+        now_beijing = datetime.now(beijing_tz)
+        today = now_beijing.replace(hour=0, minute=0, second=0, microsecond=0)
 
-        articles = session.execute(
-            select(RawArticle).where(
-                RawArticle.created_at >= today,
-                RawArticle.created_at < tomorrow,
-                RawArticle.is_relevant == True,
-            ).order_by(RawArticle.publish_time.desc())
-        ).scalars().all()
-
-        if not articles:
-            articles = session.execute(
-                select(RawArticle).where(
-                    RawArticle.created_at >= today,
-                    RawArticle.created_at < tomorrow,
-                ).order_by(RawArticle.publish_time.desc()).limit(30)
-            ).scalars().all()
-
-        if not articles:
-            articles = session.execute(
-                select(RawArticle).where(
-                    RawArticle.created_at >= yesterday,
-                    RawArticle.created_at < today,
-                    RawArticle.is_relevant == True,
-                ).order_by(RawArticle.publish_time.desc())
-            ).scalars().all()
-
-        if not articles:
-            articles = session.execute(
-                select(RawArticle).where(
-                    RawArticle.created_at >= yesterday,
-                    RawArticle.created_at < today,
-                ).order_by(RawArticle.publish_time.desc()).limit(30)
-            ).scalars().all()
+        events = _get_digest_candidate_events(session, now=now_beijing, fallback_limit=30)
 
         digest_provider = session.execute(
             select(LlmProvider).where(
@@ -329,7 +596,7 @@ def _do_generate_digest(workflow_id: str) -> dict:
                 )
             ).scalar_one_or_none()
 
-        content_md = _generate_digest_content(articles, digest_provider)
+        content_md = _generate_digest_content(events, digest_provider, session)
 
         existing = session.execute(
             select(DailyDigest).where(DailyDigest.digest_date == today)
@@ -337,7 +604,7 @@ def _do_generate_digest(workflow_id: str) -> dict:
 
         if existing:
             existing.content_markdown = content_md
-            existing.item_count = len(articles)
+            existing.item_count = len(events)
             existing.status = "published"
             existing.generated_at = datetime.now(timezone.utc)
             if digest_provider:
@@ -349,7 +616,7 @@ def _do_generate_digest(workflow_id: str) -> dict:
                 id=str(__import__("uuid").uuid4()),
                 digest_date=today,
                 content_markdown=content_md,
-                item_count=len(articles),
+                item_count=len(events),
                 status="published",
                 generated_at=datetime.now(timezone.utc),
             )
@@ -363,7 +630,7 @@ def _do_generate_digest(workflow_id: str) -> dict:
         return {
             "workflow_id": workflow_id,
             "digest_date": today.strftime("%Y-%m-%d"),
-            "item_count": len(articles),
+            "item_count": len(events),
             "digest_id": digest.id,
             "used_llm": digest_provider is not None,
             "llm_provider": digest_provider.name if digest_provider else None,
@@ -371,38 +638,72 @@ def _do_generate_digest(workflow_id: str) -> dict:
         }
 
 
-def _generate_digest_content(articles: list, provider: LlmProvider | None) -> str:
-    if not articles:
-        return "# 每日摘要\n\n今日暂无相关文章。"
+def _generate_digest_content(events: list[Event], provider: LlmProvider | None, session) -> str:
+    if not events:
+        return "# 每日摘要\n\n今日暂无事件。"
 
-    header = f"# 每日摘要\n\n**日期**: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}\n\n"
-    header += f"**共 {len(articles)} 篇文章**\n\n---\n\n"
+    serialized_events = events
+
+    beijing_tz = timezone(timedelta(hours=8))
+    header = f"# 每日摘要\n\n**日期**: {datetime.now(beijing_tz).strftime('%Y-%m-%d')}\n\n"
+    header += f"**共 {len(serialized_events)} 个事件**\n\n---\n\n"
 
     if provider:
         try:
-            top_articles = articles[:20]
+            selected_articles = _select_digest_articles(serialized_events, max_articles=30)
+            event_summaries = []
+            event_theme_pool = _build_digest_theme_pool(serialized_events)
+            for index, event in enumerate(serialized_events, 1):
+                participants = "、".join(entity["name"] for entity in event.get("entities", [])[:4]) or "未识别主体"
+                event_summary = (event.get("summary_long") or event.get("summary_short") or "暂无摘要").strip()
+                latest_article_time = event.get("selection_latest_article_time") or event.get("latest_article_time")
+                representative_titles = "；".join(
+                    article["title"]
+                    for article in event.get("representative_articles", [])[:3]
+                    if article.get("title")
+                ) or "无"
+                event_summaries.append(
+                    f"{index}. 事件ID: {event['id']}\n"
+                    f"   - 标题: {event['title']}\n"
+                    f"   - 当前事件分类: {_digest_category_name(event)}\n"
+                    f"   - 参与方: {participants}\n"
+                    f"   - 事件摘要: {event_summary[:_DIGEST_EVENT_SUMMARY_LIMIT]}\n"
+                    f"   - 最新相关文章时间: {latest_article_time.isoformat() if latest_article_time else '未知'}\n"
+                    f"   - 关联文章数: {event.get('article_count', 0)}\n"
+                    f"   - 代表文章标题: {representative_titles}"
+                )
+
             article_summaries = []
-            for i, a in enumerate(top_articles, 1):
-                summary = a.summary_short or a.plain_content or ""
+            for i, article in enumerate(selected_articles, 1):
+                event_id = article.get("event_id")
+                event = event_theme_pool.get(event_id, {})
                 article_summaries.append(
-                    f"{i}. **{a.title}**\n"
-                    f"   - 来源: {a.account_name}\n"
-                    f"   - 链接: {a.article_url}\n"
-                    f"   - 摘要: {summary[:150] if summary else '暂无摘要'}"
+                    f"{i}. [事件ID: {event_id}] {article['title']}\n"
+                    f"   - 当前事件分类: {_digest_category_name(event)}\n"
+                    f"   - 所属事件: {article['event_title']}\n"
+                    f"   - 来源: {article['account_name']}\n"
+                    f"   - 发布时间: {article['publish_time'].isoformat() if article.get('publish_time') else '未知'}\n"
+                    f"   - 内容摘要: {article['content_text']}"
                 )
 
             prompt = (
-                f"以下是今日 {len(articles)} 篇科技文章中最重要的 {len(top_articles)} 篇。\n"
+                f"以下是本次摘要涉及的 {len(serialized_events)} 个候选事件，以及从中挑选出的 {len(selected_articles)} 篇补充文章材料。\n"
                 "请生成一份简洁的每日摘要，包含：\n"
                 "1. 一段话概述今日整体动态（3-5句话）\n"
-                "2. 按主题分组，每个主题用 `## 主题名称` 标题（前后各空一行），每组2-3句话分析\n"
-                "3. 列出相关文章，格式为 `- [标题](链接) — 来源`（每篇文章必须带可点击链接）\n"
-                "4. 使用标准 Markdown 格式，中文\n\n"
+                "2. 基于全部事件，自主归纳 3-6 个主题，每个主题使用 `## 主题标题`\n"
+                "3. 主题标题风格参考“具身智能商业化加速”“融资升温，头部格局快速形成”这类编辑部式标题\n"
+                "4. 每个主题下只写 3-5 句话总述，不要输出事件标题、小标题、编号、列表或链接\n"
+                "5. 每个主题块末尾必须单独追加一行 `<!-- events: 事件ID1,事件ID2 -->`，列出该主题对应的全部事件ID\n"
+                "6. 所有事件ID必须来自输入素材，且全部事件都必须至少被一个主题覆盖\n"
+                "7. 使用标准 Markdown 格式，中文\n\n"
                 "注意：\n"
                 "- 每个 `## ` 标题前后必须各空一行\n"
-                "- 文章链接必须使用 Markdown 链接格式 `[标题](URL)`\n"
+                "- 主题标题不需要复述原始事件分类，可以自由归纳\n"
+                "- 不要输出 Markdown 链接、裸 URL 或 HTML 链接\n"
+                "- 补充文章材料只是帮助理解细节，不能替代主题覆盖\n"
                 "- 不要使用 HTML 标签\n\n"
-                f"文章：\n\n" + "\n\n".join(article_summaries)
+                f"事件素材：\n\n" + "\n\n".join(event_summaries) + "\n\n"
+                f"补充文章材料：\n\n" + ("\n\n".join(article_summaries) if article_summaries else "无额外文章材料。")
             )
 
             result = _call_llm_sync(
@@ -414,7 +715,9 @@ def _generate_digest_content(articles: list, provider: LlmProvider | None) -> st
 
             if result.get("success"):
                 raw = result["content"]
-                content = _fix_markdown_headings(raw)
+                content = _sanitize_digest_content(raw)
+                content = _fix_markdown_headings(content)
+                content = _inject_digest_theme_links(content, serialized_events)
                 content = header + content
                 footer = f"\n\n---\n\n*摘要由 AI 自动生成，使用模型: {provider.default_model}*"
                 return content + footer
@@ -424,20 +727,20 @@ def _generate_digest_content(articles: list, provider: LlmProvider | None) -> st
             logger.warning(f"LLM digest generation failed, falling back to simple format: {e}")
 
     content = header
-    by_account: dict[str, list] = {}
-    for a in articles:
-        by_account.setdefault(a.account_name, []).append(a)
+    by_type: dict[str, list] = {}
+    for event in serialized_events:
+        by_type.setdefault(event.get("event_type") or "其他", []).append(event)
 
     content += "## 📊 今日概览\n\n"
-    content += f"共采集到 **{len(articles)}** 篇文章，来自 **{len(by_account)}** 个公众号。\n\n"
+    content += f"共整理 **{len(serialized_events)}** 个聚合事件。\n\n"
 
-    for account, arts in by_account.items():
-        content += f"## {account} ({len(arts)}篇)\n\n"
-        for a in arts:
-            content += f"- [{a.title}]({a.article_url})"
-            if a.summary_short:
-                content += f"\n  > {a.summary_short[:150]}"
-            content += "\n"
+    for event_type, items in by_type.items():
+        content += f"## {event_type}\n\n"
+        category = {"name": event_type, "events": [{**event, "_digest_event_index": index} for index, event in enumerate(items)]}
+        content += _fallback_category_summary(category) + "\n\n"
+        links = _render_digest_category_links(category)
+        if links:
+            content += "\n".join(links) + "\n"
         content += "\n"
 
     return content
@@ -445,7 +748,6 @@ def _generate_digest_content(articles: list, provider: LlmProvider | None) -> st
 
 def _fix_markdown_headings(text: str) -> str:
     """Ensure ## headings have proper newlines before and after."""
-    import re
     lines = text.split("\n")
     fixed = []
     for i, line in enumerate(lines):
@@ -459,6 +761,232 @@ def _fix_markdown_headings(text: str) -> str:
         else:
             fixed.append(line)
     return "\n".join(fixed)
+
+
+def _sanitize_digest_content(text: str) -> str:
+    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1", text)
+    text = re.sub(r"https?://[^\s)>]+", "", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+_DIGEST_THEME_TAG_RE = re.compile(r"<!--\s*events:\s*([a-zA-Z0-9,\-\s]+)\s*-->")
+
+
+def _digest_category_name(event: dict) -> str:
+    return event.get("event_type") or "其他"
+
+
+def _group_digest_events_by_category(events: list[dict]) -> list[dict]:
+    grouped = {}
+    for event_index, event in enumerate(events):
+        category = _digest_category_name(event)
+        entry = grouped.setdefault(category, {"name": category, "events": []})
+        entry["events"].append({**event, "_digest_event_index": event_index})
+    return list(grouped.values())
+
+
+def _digest_publish_time_sort_value(value) -> float:
+    dt = _coerce_datetime(value)
+    if dt is None:
+        return 0.0
+    return dt.timestamp()
+
+
+def _render_digest_category_links(category: dict) -> list[str]:
+    candidates = []
+    for event in category["events"]:
+        for article in (event.get("representative_articles") or [])[:3]:
+            title = article.get("title")
+            url = article.get("article_url")
+            if not title or not url:
+                continue
+            candidates.append(
+                {
+                    "title": title,
+                    "url": url,
+                    "source": article.get("account_name") or "未知来源",
+                    "importance": event.get("importance") or 0,
+                    "publish_sort": _digest_publish_time_sort_value(article.get("publish_time")),
+                    "event_index": event.get("_digest_event_index", 0),
+                }
+            )
+
+    candidates.sort(
+        key=lambda item: (
+            -(item["importance"] or 0),
+            -item["publish_sort"],
+            item["event_index"],
+        )
+    )
+
+    rendered = []
+    seen_urls = set()
+    for item in candidates:
+        if item["url"] in seen_urls:
+            continue
+        seen_urls.add(item["url"])
+        rendered.append(f"- [{item['title']}]({item['url']}) — {item['source']}")
+    return rendered
+
+
+def _fallback_category_summary(category: dict) -> str:
+    item_count = len(category["events"])
+    if item_count <= 0:
+        return "本分类暂无可展示内容。"
+    if item_count == 1:
+        return "本分类聚焦 1 个重点事件，下列链接可用于查看完整上下文。"
+    return f"本分类共整理 {item_count} 个相关事件，下面汇总代表文章链接供进一步查看。"
+
+
+def _build_digest_theme_pool(events: list[dict]) -> dict[str, dict]:
+    theme_pool = {}
+    for event_index, event in enumerate(events):
+        event_id = event.get("id")
+        if not event_id:
+            continue
+        theme_pool[event_id] = {**event, "_digest_event_index": event_index}
+    return theme_pool
+
+
+def _render_digest_theme_links(theme_events: list[dict]) -> list[str]:
+    candidates = []
+    for event in theme_events:
+        for article in (event.get("representative_articles") or [])[:3]:
+            title = article.get("title")
+            url = article.get("article_url")
+            if not title or not url:
+                continue
+            candidates.append(
+                {
+                    "title": title,
+                    "url": url,
+                    "source": article.get("account_name") or "未知来源",
+                    "importance": event.get("importance") or 0,
+                    "publish_sort": _digest_publish_time_sort_value(article.get("publish_time")),
+                    "event_index": event.get("_digest_event_index", 0),
+                }
+            )
+
+    candidates.sort(
+        key=lambda item: (
+            -(item["importance"] or 0),
+            -item["publish_sort"],
+            item["event_index"],
+        )
+    )
+
+    rendered = []
+    seen_urls = set()
+    for item in candidates:
+        if item["url"] in seen_urls:
+            continue
+        seen_urls.add(item["url"])
+        rendered.append(f"- [{item['title']}]({item['url']}) — {item['source']}")
+    return rendered
+
+
+def _fallback_theme_summary(theme_events: list[dict]) -> str:
+    item_count = len(theme_events)
+    if item_count <= 0:
+        return "暂无可展示内容。"
+    if item_count == 1:
+        return "这里补充 1 个未被主题归纳的重点事件，附上相关文章供进一步查看。"
+    return f"这里补充 {item_count} 个未被主题归纳的重点事件，附上相关文章供进一步查看。"
+
+
+def _parse_digest_theme_sections(content: str):
+    lines = content.splitlines()
+    intro_lines = []
+    sections = []
+    current_section = None
+
+    def flush_current():
+        nonlocal current_section
+        if current_section is None:
+            return
+        body = "\n".join(current_section["lines"]).strip()
+        raw_event_ids = current_section.pop("raw_event_ids", [])
+        event_ids = []
+        seen_ids = set()
+        for event_id in raw_event_ids:
+            if event_id and event_id not in seen_ids:
+                seen_ids.add(event_id)
+                event_ids.append(event_id)
+        sections.append(
+            {
+                "title": current_section["title"],
+                "body": body,
+                "event_ids": event_ids,
+            }
+        )
+        current_section = None
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            flush_current()
+            current_section = {"title": stripped[3:].strip(), "lines": [], "raw_event_ids": []}
+            continue
+
+        matches = _DIGEST_THEME_TAG_RE.findall(line)
+        if matches:
+            if current_section is not None:
+                for match in matches:
+                    current_section["raw_event_ids"].extend([part.strip() for part in match.split(",") if part.strip()])
+            continue
+
+        if current_section is None:
+            intro_lines.append(line)
+        else:
+            current_section["lines"].append(line)
+
+    flush_current()
+    intro = "\n".join(intro_lines).strip()
+    return ([intro] if intro else []), sections
+
+
+def _inject_digest_theme_links(content: str, events: list[dict]) -> str:
+    intro_parts, sections = _parse_digest_theme_sections(content)
+    theme_pool = _build_digest_theme_pool(events)
+    assigned_event_ids = set()
+    output = [part for part in intro_parts if part]
+
+    for section in sections:
+        theme_events = []
+        for event_id in section["event_ids"]:
+            event = theme_pool.get(event_id)
+            if not event:
+                continue
+            theme_events.append(event)
+            assigned_event_ids.add(event_id)
+
+        if output and output[-1].strip():
+            output.append("")
+        output.append(f"## {section['title']}")
+        output.append("")
+        if section["body"]:
+            output.append(section["body"])
+        links = _render_digest_theme_links(theme_events)
+        if links:
+            output.append("")
+            output.extend(links)
+        output.append("")
+
+    missing_events = [event for event_id, event in theme_pool.items() if event_id not in assigned_event_ids]
+    if missing_events:
+        if output and output[-1].strip():
+            output.append("")
+        output.append("## 其他重点动态")
+        output.append("")
+        output.append(_fallback_theme_summary(missing_events))
+        links = _render_digest_theme_links(missing_events)
+        if links:
+            output.append("")
+            output.extend(links)
+        output.append("")
+
+    return "\n".join(output).strip()
 
 
 def _call_llm_sync(provider: LlmProvider, system_prompt: str, user_prompt: str, timeout: int | None = None) -> dict:

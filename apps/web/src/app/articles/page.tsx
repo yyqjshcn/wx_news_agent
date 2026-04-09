@@ -10,7 +10,9 @@ const PAGE_SIZE = 30;
 function ArticleRow({ article }: { article: any }) {
   const [expanded, setExpanded] = useState(false);
 
-  const hasSummary = article.status === "classified" && (article.summary_short || article.summary_long);
+  const hasDetails =
+    article.status === "classified" &&
+    (article.summary_short || article.summary_long || (article.linked_events && article.linked_events.length > 0));
 
   return (
     <Fragment>
@@ -57,9 +59,11 @@ function ArticleRow({ article }: { article: any }) {
             </span>
           )}
         </td>
-        <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{article.primary_event_type || "-"}</td>
+        <td className="px-4 py-3 text-gray-600 whitespace-nowrap">
+          {article.linked_events?.length ? `${article.linked_events.length} 个事件` : (article.primary_event_type || "-")}
+        </td>
         <td className="px-4 py-3 whitespace-nowrap">
-          {hasSummary ? (
+          {hasDetails ? (
             <button
               onClick={() => setExpanded(!expanded)}
               className="inline-flex items-center gap-1 px-2 py-1 bg-blue-50 text-blue-600 rounded-md hover:bg-blue-100 transition-colors"
@@ -78,7 +82,7 @@ function ArticleRow({ article }: { article: any }) {
             : "-"}
         </td>
       </tr>
-      {expanded && hasSummary && (
+      {expanded && hasDetails && (
         <tr>
           <td colSpan={7} className="px-0 py-0">
             <div className="bg-gray-50 border-y border-gray-200 px-6 py-5">
@@ -140,6 +144,22 @@ function ArticleRow({ article }: { article: any }) {
                         <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded text-xs">
                           {article.primary_event_type}
                         </span>
+                      </div>
+                    )}
+                    {article.linked_events && article.linked_events.length > 0 && (
+                      <div>
+                        <div className="text-xs font-medium text-gray-400 mb-1.5">🔗 关联事件</div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {article.linked_events.map((event: any) => (
+                            <a
+                              key={event.id}
+                              href={`/events#event-${event.id}`}
+                              className="px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded text-xs hover:bg-emerald-200"
+                            >
+                              {event.title}
+                            </a>
+                          ))}
+                        </div>
                       </div>
                     )}
                     {article.relevance_score != null && (
