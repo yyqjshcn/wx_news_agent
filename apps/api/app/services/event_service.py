@@ -4,6 +4,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, or_, select
+from sqlalchemy.sql import Select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import RawArticle
@@ -511,6 +512,41 @@ async def serialize_events(db: AsyncSession, events: list[Event], include_relate
     ]
 
 
+def _apply_event_filters(
+    query_stmt: Select,
+    *,
+    event_type: str | None = None,
+    status: str | None = None,
+    included_in_digest: bool | None = None,
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+    query: str | None = None,
+) -> Select:
+    if event_type:
+        query_stmt = query_stmt.where(Event.event_type == event_type)
+    if status:
+        query_stmt = query_stmt.where(Event.status == status)
+    if included_in_digest is not None:
+        query_stmt = query_stmt.where(Event.included_in_digest == included_in_digest)
+    if start_date:
+        query_stmt = query_stmt.where(or_(Event.event_date_end.is_(None), Event.event_date_end >= start_date))
+    if end_date:
+        query_stmt = query_stmt.where(or_(Event.event_date_start.is_(None), Event.event_date_start <= end_date))
+    if query and query.strip():
+        pattern = f"%{query.strip()}%"
+        query_stmt = query_stmt.outerjoin(EventEntity, EventEntity.event_id == Event.id).where(
+            or_(
+                Event.title.ilike(pattern),
+                Event.summary_short.ilike(pattern),
+                Event.summary_long.ilike(pattern),
+                Event.analyst_note.ilike(pattern),
+                EventEntity.name.ilike(pattern),
+                EventEntity.normalized_name.ilike(pattern),
+            )
+        )
+    return query_stmt
+
+
 async def list_events(
     db: AsyncSession,
     skip: int = 0,
@@ -520,25 +556,45 @@ async def list_events(
     included_in_digest: bool | None = None,
     start_date: datetime | None = None,
     end_date: datetime | None = None,
+    query: str | None = None,
 ) -> list[dict]:
-    query = select(Event)
-    if event_type:
-        query = query.where(Event.event_type == event_type)
-    if status:
-        query = query.where(Event.status == status)
-    if included_in_digest is not None:
-        query = query.where(Event.included_in_digest == included_in_digest)
-    if start_date:
-        query = query.where(or_(Event.event_date_end.is_(None), Event.event_date_end >= start_date))
-    if end_date:
-        query = query.where(or_(Event.event_date_start.is_(None), Event.event_date_start <= end_date))
-
-    query = query.order_by(
+    query_stmt = _apply_event_filters(
+        select(Event).distinct(),
+        event_type=event_type,
+        status=status,
+        included_in_digest=included_in_digest,
+        start_date=start_date,
+        end_date=end_date,
+        query=query,
+    )
+    query_stmt = query_stmt.order_by(
         func.coalesce(Event.event_date_end, Event.event_date_start, Event.updated_at).desc()
     ).offset(skip).limit(limit)
-    result = await db.execute(query)
+    result = await db.execute(query_stmt)
     events = result.scalars().all()
     return await serialize_events(db, events)
+
+
+async def count_events(
+    db: AsyncSession,
+    event_type: str | None = None,
+    status: str | None = None,
+    included_in_digest: bool | None = None,
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+    query: str | None = None,
+) -> int:
+    query_stmt = _apply_event_filters(
+        select(func.count(func.distinct(Event.id))),
+        event_type=event_type,
+        status=status,
+        included_in_digest=included_in_digest,
+        start_date=start_date,
+        end_date=end_date,
+        query=query,
+    )
+    result = await db.execute(query_stmt)
+    return result.scalar() or 0
 
 
 async def get_event(db: AsyncSession, event_id: str, include_related_articles: bool = True) -> dict | None:

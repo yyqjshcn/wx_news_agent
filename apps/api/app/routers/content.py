@@ -149,6 +149,7 @@ async def list_events(
     included_in_digest: Optional[bool] = None,
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
+    query: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
     return await event_service.list_events(
@@ -160,7 +161,30 @@ async def list_events(
         included_in_digest=included_in_digest,
         start_date=start_date,
         end_date=end_date,
+        query=query,
     )
+
+
+@router.get("/events/count")
+async def count_events(
+    event_type: Optional[str] = None,
+    status: Optional[str] = None,
+    included_in_digest: Optional[bool] = None,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+    query: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    count = await event_service.count_events(
+        db,
+        event_type=event_type,
+        status=status,
+        included_in_digest=included_in_digest,
+        start_date=start_date,
+        end_date=end_date,
+        query=query,
+    )
+    return {"count": count}
 
 
 @router.get("/events/{event_id}", response_model=EventResponse)

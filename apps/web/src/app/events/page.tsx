@@ -2,9 +2,10 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, ExternalLink, Filter, Link2, GitMerge, Scissors, Edit2, Trash2, X } from "lucide-react";
+import { ExternalLink, Filter, Link2, GitMerge, Scissors, Edit2, Trash2, X } from "lucide-react";
 
 import { api } from "@/lib/api";
+import { Pagination } from "@/components/pagination";
 
 const PAGE_SIZE = 20;
 
@@ -27,6 +28,7 @@ export default function EventsPage() {
   const queryClient = useQueryClient();
   const [page, setPage] = useState(0);
   const [filters, setFilters] = useState({
+    query: "",
     event_type: "",
     status: "active",
     included_in_digest: "",
@@ -48,20 +50,38 @@ export default function EventsPage() {
   const [splitTitle, setSplitTitle] = useState("");
   const [selectedArticleIds, setSelectedArticleIds] = useState<string[]>([]);
 
-  const params = useMemo(() => {
+  const filterParams = useMemo(() => {
     const search = new URLSearchParams();
-    search.set("skip", String(page * PAGE_SIZE));
-    search.set("limit", String(PAGE_SIZE));
+    if (filters.query) search.set("query", filters.query);
     if (filters.event_type) search.set("event_type", filters.event_type);
     if (filters.status) search.set("status", filters.status);
     if (filters.included_in_digest) search.set("included_in_digest", filters.included_in_digest);
     return search.toString();
-  }, [filters, page]);
+  }, [filters]);
+
+  const params = useMemo(() => {
+    const search = new URLSearchParams(filterParams);
+    search.set("skip", String(page * PAGE_SIZE));
+    search.set("limit", String(PAGE_SIZE));
+    return search.toString();
+  }, [filterParams, page]);
 
   const { data: events, isLoading } = useQuery({
     queryKey: ["events", params],
     queryFn: () => api.get(`/api/events?${params}`),
   });
+
+  const { data: totalCount } = useQuery({
+    queryKey: ["events-count", filterParams],
+    queryFn: () => api.get(`/api/events/count?${filterParams}`).then((r: any) => r.count),
+  });
+
+  const totalPages = Math.ceil((totalCount || 0) / PAGE_SIZE);
+
+  const handleFilterChange = (nextFilters: typeof filters) => {
+    setFilters(nextFilters);
+    setPage(0);
+  };
 
   const { data: selectedEvent, isFetching: isLoadingDetail } = useQuery({
     queryKey: ["event-detail", selectedEventId],
@@ -161,13 +181,17 @@ export default function EventsPage() {
           <Filter size={16} className="text-gray-400" />
           <span className="text-sm font-medium">筛选条件</span>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <input
+            type="text"
+            placeholder="搜索标题 / 摘要 / 参与方"
+            value={filters.query}
+            onChange={(e) => handleFilterChange({ ...filters, query: e.target.value })}
+            className="px-3 py-2 border rounded-md text-sm"
+          />
           <select
             value={filters.event_type}
-            onChange={(e) => {
-              setFilters((prev) => ({ ...prev, event_type: e.target.value }));
-              setPage(0);
-            }}
+            onChange={(e) => handleFilterChange({ ...filters, event_type: e.target.value })}
             className="px-3 py-2 border rounded-md text-sm"
           >
             <option value="">全部类型</option>
@@ -180,10 +204,7 @@ export default function EventsPage() {
 
           <select
             value={filters.status}
-            onChange={(e) => {
-              setFilters((prev) => ({ ...prev, status: e.target.value }));
-              setPage(0);
-            }}
+            onChange={(e) => handleFilterChange({ ...filters, status: e.target.value })}
             className="px-3 py-2 border rounded-md text-sm"
           >
             <option value="">全部状态</option>
@@ -192,10 +213,7 @@ export default function EventsPage() {
 
           <select
             value={filters.included_in_digest}
-            onChange={(e) => {
-              setFilters((prev) => ({ ...prev, included_in_digest: e.target.value }));
-              setPage(0);
-            }}
+            onChange={(e) => handleFilterChange({ ...filters, included_in_digest: e.target.value })}
             className="px-3 py-2 border rounded-md text-sm"
           >
             <option value="">全部摘要状态</option>
@@ -559,27 +577,9 @@ export default function EventsPage() {
         )}
       </div>
 
-      {events && events.length > 0 && (
-        <div className="flex items-center justify-between px-4 py-3 mt-4 bg-white rounded-lg border">
-          <span className="text-sm text-gray-500">第 {page + 1} 页</span>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setPage((prev) => Math.max(0, prev - 1))}
-              disabled={page === 0}
-              className="flex items-center gap-1 px-3 py-1.5 border rounded-md text-sm hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              <ChevronLeft size={14} />
-              上一页
-            </button>
-            <button
-              onClick={() => setPage((prev) => prev + 1)}
-              disabled={events.length < PAGE_SIZE}
-              className="flex items-center gap-1 px-3 py-1.5 border rounded-md text-sm hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              下一页
-              <ChevronRight size={14} />
-            </button>
-          </div>
+      {totalPages > 1 && (
+        <div className="bg-white rounded-lg border shadow-sm overflow-hidden">
+          <Pagination currentPage={page} totalPages={totalPages} onPageChange={setPage} />
         </div>
       )}
     </div>
