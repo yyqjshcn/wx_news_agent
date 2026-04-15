@@ -130,60 +130,85 @@ async def _fetch_articles_from_adapter(fakeid: str, count: int = 20) -> list:
         return data.get("list", data.get("articles", []))
 
 
-async def _fetch_article_content(url: str) -> dict:
+async def _fetch_article_content(url: str, max_retries: int = 3) -> dict:
     """Fetch full article content via WeChat adapter POST /api/article."""
-    try:
-        async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(
-                f"{WECHAT_ADAPTER_URL}/api/article",
-                json={"url": url},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            if data.get("success") and data.get("data"):
-                return {
-                    "plain_content": data["data"].get("plain_content", ""),
-                    "html_content": data["data"].get("content", ""),
-                }
-            return {"plain_content": "", "html_content": "", "error": data.get("error", "No content returned")}
-    except Exception as e:
-        logger.warning(f"Failed to fetch article content from {url}: {e}")
-        return {"plain_content": "", "html_content": "", "error": str(e)}
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient(timeout=60) as client:
+                resp = await client.post(
+                    f"{WECHAT_ADAPTER_URL}/api/article",
+                    json={"url": url},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                if data.get("success") and data.get("data"):
+                    return {
+                        "plain_content": data["data"].get("plain_content", ""),
+                        "html_content": data["data"].get("content", ""),
+                    }
+                last_error = data.get("error", "No content returned")
+                logger.warning(f"WeChat adapter returned no content (attempt {attempt+1}/{max_retries}): {last_error}")
+                if last_error and "Rate limited" in str(last_error):
+                    # Parse retry delay from rate limit message (e.g., "请13秒后重试")
+                    delay_match = re.search(r'请(\d+)秒后重试', str(last_error))
+                    if delay_match:
+                        delay = int(delay_match.group(1))
+                        logger.info(f"Rate limited, waiting {delay}s before retry")
+                        await asyncio.sleep(delay)
+                        continue
+        except Exception as e:
+            last_error = str(e)
+            logger.warning(f"Failed to fetch article content (attempt {attempt+1}/{max_retries}): {e}")
+
+        if attempt < max_retries - 1:
+            wait_time = min(2 ** attempt * 3, 15)
+            logger.info(f"Waiting {wait_time}s before retry...")
+            await asyncio.sleep(wait_time)
+
+    logger.error(f"Failed to fetch article content after {max_retries} retries: {url} | {last_error}")
+    return {"plain_content": "", "html_content": "", "error": last_error}
 
 
-async def _fetch_rss_article_content(url: str) -> dict:
+async def _fetch_rss_article_content(url: str, max_retries: int = 3) -> dict:
     """Fetch full article content from an RSS article URL."""
-    try:
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            html = resp.text
-            
-            from lxml import html as lxml_html
-            tree = lxml_html.fromstring(html)
-            
-            # Remove script and style elements
-            for el in tree.xpath("//script|//style|//nav|//footer|//header|//aside"):
-                el.getparent().remove(el, ignore_already_removed=True)
-            
-            # Try to find main content area
-            content_el = tree.xpath("//article") or tree.xpath("//main") or tree.xpath("//div[contains(@class, 'content')]") or tree.xpath("//div[contains(@class, 'article')]") or tree.xpath("//div[contains(@class, 'post')]") or tree.xpath("//body")
-            if content_el:
-                text = content_el[0].text_content()
-            else:
-                text = tree.text_content()
-            
-            # Clean up whitespace
-            lines = [line.strip() for line in text.split("\n") if line.strip()]
-            plain_text = "\n".join(lines)
-            
-            return {
-                "plain_content": plain_text[:10000],
-                "html_content": html[:50000],
-            }
-    except Exception as e:
-        logger.warning(f"Failed to fetch RSS article content from {url}: {e}")
-        return {"plain_content": "", "html_content": "", "error": str(e)}
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+                resp = await client.get(url)
+                resp.raise_for_status()
+                html = resp.text
+                
+                from lxml import html as lxml_html
+                tree = lxml_html.fromstring(html)
+                
+                # Remove script and style elements
+                for el in tree.xpath("//script|//style|//nav|//footer|//header|//aside"):
+                    el.getparent().remove(el, ignore_already_removed=True)
+                
+                # Try to find main content area
+                content_el = tree.xpath("//article") or tree.xpath("//main") or tree.xpath("//div[contains(@class, 'content')]") or tree.xpath("//div[contains(@class, 'article')]") or tree.xpath("//div[contains(@class, 'post')]") or tree.xpath("//body")
+                if content_el:
+                    text = content_el[0].text_content()
+                else:
+                    text = tree.text_content()
+                
+                # Clean up whitespace
+                lines = [line.strip() for line in text.split("\n") if line.strip()]
+                plain_text = "\n".join(lines)
+                
+                return {
+                    "plain_content": plain_text[:10000],
+                    "html_content": html[:50000],
+                }
+        except Exception as e:
+            last_error = str(e)
+            logger.warning(f"Failed to fetch RSS article content (attempt {attempt+1}/{max_retries}): {url}: {e}")
+            await asyncio.sleep(2 ** attempt)
+
+    logger.error(f"Failed to fetch RSS article content after {max_retries} retries: {url} | {last_error}")
+    return {"plain_content": "", "html_content": "", "error": last_error}
 
 
 async def do_daily_ingest(workflow_id: str) -> dict:
@@ -253,12 +278,15 @@ async def do_daily_ingest(workflow_id: str) -> dict:
                         continue
 
                     # Fetch full article content
-                    plain_content = digest
+                    plain_content = digest or title  # fallback: title if digest is empty
                     html_content = None
                     if link:
                         content_result = await _fetch_article_content(link)
+                        error = content_result.get("error")
                         if content_result.get("plain_content"):
                             plain_content = content_result["plain_content"]
+                        elif error:
+                            logger.warning(f"Using fallback content for article: {title[:50]}... (error: {error})")
                         if content_result.get("html_content"):
                             html_content = content_result["html_content"]
 
@@ -279,6 +307,9 @@ async def do_daily_ingest(workflow_id: str) -> dict:
                     )
                     session.add(new_article)
                     total_stored += 1
+
+                    # Add delay between article fetches to avoid WeChat rate limiting
+                    await asyncio.sleep(8)
 
                 account.last_checked_at = datetime.now(timezone.utc)
                 account.last_success_at = datetime.now(timezone.utc)
@@ -380,36 +411,41 @@ async def do_classify_articles(workflow_id: str) -> dict:
             break
         
         logger.info(f"Processing batch {iteration}: {len(articles)} articles")
-        
-        # Process each article sequentially to avoid concurrency issues
+
+        # Process articles concurrently with limited concurrency
         batch_classified = 0
         batch_errors = []
-        
-        for article in articles:
-            try:
+
+        semaphore = asyncio.Semaphore(3)
+
+        async def process_with_semaphore(article: RawArticle) -> tuple[bool, str | None]:
+            async with semaphore:
                 # Check timeout before processing each article
                 elapsed = datetime.now(timezone.utc) - start_time
                 if elapsed.total_seconds() > MAX_WORKFLOW_MINUTES * 60:
-                    total_errors.append(f"Workflow timed out after {MAX_WORKFLOW_MINUTES} minutes")
-                    logger.warning("Timeout reached during batch processing")
-                    break
-                
-                # Process article with its own session
-                success, error = await _classify_single_article(article, provider)
-                
+                    return False, "Workflow timed out"
+                return await _classify_single_article(article, provider)
+
+        results = await asyncio.gather(
+            *[process_with_semaphore(a) for a in articles],
+            return_exceptions=True,
+        )
+
+        for result in results:
+            if isinstance(result, Exception):
+                error_msg = f"Unexpected error: {result}"
+                batch_errors.append(error_msg)
+                total_errors.append(error_msg)
+                logger.warning(error_msg)
+            else:
+                success, error = result
                 if success:
                     batch_classified += 1
                     total_classified += 1
                 else:
                     batch_errors.append(error)
                     total_errors.append(error)
-                    logger.warning(f"Failed to classify article {article.id[:8]}: {error}")
-                    
-            except Exception as e:
-                error_msg = f"{article.title[:30] if article.title else 'Unknown'}: {e}"
-                batch_errors.append(error_msg)
-                total_errors.append(error_msg)
-                logger.exception(f"Unexpected error classifying article {article.id}")
+                    logger.warning(f"Failed to classify article: {error}")
         
         logger.info(f"Batch {iteration} complete: {batch_classified}/{len(articles)} classified, {len(batch_errors)} errors")
     
@@ -718,12 +754,15 @@ async def do_rss_ingest(workflow_id: str) -> dict:
 
                     # Fetch full article content
                     rss_content = entry.get("content", "")
-                    plain_content = rss_content
+                    plain_content = rss_content or entry.get("title", "")  # fallback to title
                     html_content = None
                     if link:
                         content_result = await _fetch_rss_article_content(link)
+                        error = content_result.get("error")
                         if content_result.get("plain_content"):
                             plain_content = content_result["plain_content"]
+                        elif error:
+                            logger.warning(f"Using fallback content for RSS article: {entry.get('title', '')[:50]}... (error: {error})")
                         if content_result.get("html_content"):
                             html_content = content_result["html_content"]
 
