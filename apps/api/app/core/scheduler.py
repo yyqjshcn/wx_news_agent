@@ -98,7 +98,14 @@ async def _execute_workflow(run_id: str, label: str, payload_factory):
     logger.info("Starting %s workflow run %s", label, run_id)
     try:
         result = await payload_factory(workflow_id)
-        await _mark_run_finished(run_id, WorkflowRunStatus.SUCCESS, summary=result)
+        # Check summary for business-level status instead of assuming SUCCESS
+        summary_status = (result or {}).get("status")
+        if summary_status in ("failed",):
+            await _mark_run_finished(
+                run_id, WorkflowRunStatus.FAILED, summary=result,
+            )
+        else:
+            await _mark_run_finished(run_id, WorkflowRunStatus.SUCCESS, summary=result)
         return result
     except Exception as e:
         logger.error("%s workflow run %s failed: %s", label, run_id, e)
@@ -923,6 +930,54 @@ def _fallback_category_summary(category: dict) -> str:
     return f"本分类共整理 {item_count} 个相关事件，下面汇总代表文章链接供进一步查看。"
 
 
+_SECTION_CATEGORIES = (
+    ("embodied_data", ("数据集", "训练数据", "数据采集", "数据云", "数据标注", "数据基础设施")),
+    ("world_model", ("世界模型", "world model", "空间理解")),
+    ("embodied_other", ("人形机器人", "具身机器人", "具身智能", "embodied", "具身AI", "机器人")),
+)
+
+
+def _classify_digest_section(section: dict, theme_pool: dict) -> str:
+    text = (section.get("title") or "").lower()
+
+    for category, keywords in _SECTION_CATEGORIES:
+        for keyword in keywords:
+            if keyword.lower() in text:
+                return category
+
+    body_text = (section.get("body") or "").lower()
+    data_kw = (
+        "数据集", "训练数据", "数据采集", "数据基础设施", "数据编译", "数据范式",
+        "数据质量", "训练范式", "仿真数据", "embodied dataset", "data collection",
+    )
+    for keyword in data_kw:
+        if keyword.lower() in body_text:
+            return "embodied_data"
+
+    wm_kw = ("世界模型", "world model", "空间理解")
+    for keyword in wm_kw:
+        if keyword.lower() in body_text:
+            return "world_model"
+
+    return "other"
+
+
+_SECTION_CATEGORY_ORDER = {
+    "embodied_data": 0,
+    "world_model": 1,
+    "embodied_other": 2,
+    "other": 3,
+}
+
+
+def _sort_digest_sections(sections: list[dict], theme_pool: dict) -> list[dict]:
+    def section_key(section):
+        category = _classify_digest_section(section, theme_pool)
+        return _SECTION_CATEGORY_ORDER.get(category, 3)
+
+    return sorted(sections, key=section_key)
+
+
 def _build_digest_theme_pool(events: list[dict]) -> dict[str, dict]:
     theme_pool: dict[str, dict] = {}
     for event_index, event in enumerate(events):
@@ -1040,6 +1095,7 @@ def _parse_digest_theme_sections(content: str) -> tuple[list[str], list[dict]]:
 def _inject_digest_theme_links(content: str, events: list[dict]) -> str:
     intro_parts, sections = _parse_digest_theme_sections(content)
     theme_pool = _build_digest_theme_pool(events)
+    sections = _sort_digest_sections(sections, theme_pool)
     assigned_event_ids: set[str] = set()
     output: list[str] = [part for part in intro_parts if part]
 
@@ -1064,8 +1120,10 @@ def _inject_digest_theme_links(content: str, events: list[dict]) -> str:
             output.extend(links)
         output.append("")
 
+    other_section = next((s for s in sections if s["title"] == "其他重点动态"), None)
+
     missing_events = [event for event_id, event in theme_pool.items() if event_id not in assigned_event_ids]
-    if missing_events:
+    if missing_events and not other_section:
         if output and output[-1].strip():
             output.append("")
         output.append("## 其他重点动态")

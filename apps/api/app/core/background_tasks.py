@@ -42,15 +42,23 @@ async def _execute_workflow(run_id: str, label: str, task_fn):
 
     try:
         result = await task_fn(workflow_id)
-        
+
         session = async_session()
         try:
             run = await session.get(WorkflowRun, run_id)
             if not run:
                 return
-            
+
             finished_at = datetime.now(timezone.utc)
-            run.status = WorkflowRunStatus.SUCCESS
+            # Check summary for business-level status instead of assuming SUCCESS
+            summary_status = (result or {}).get("status")
+            if summary_status in ("failed",):
+                run.status = WorkflowRunStatus.FAILED
+                workflow_last_status = WorkflowRunStatus.FAILED.value
+            else:
+                run.status = WorkflowRunStatus.SUCCESS
+                workflow_last_status = WorkflowRunStatus.SUCCESS.value
+
             run.finished_at = finished_at
             run.summary_json = result or {}
             started_at = _ensure_tz(run.started_at)
@@ -60,7 +68,7 @@ async def _execute_workflow(run_id: str, label: str, task_fn):
             workflow = await session.get(Workflow, workflow_id)
             if workflow:
                 workflow.last_run_at = finished_at
-                workflow.last_status = WorkflowRunStatus.SUCCESS.value
+                workflow.last_status = workflow_last_status
                 workflow.updated_at = finished_at
                 session.add(workflow)
 
