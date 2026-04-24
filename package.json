@@ -1,7 +1,7 @@
 {
-  "name": "wx_news_agent",
+  "name": "omninewsflow",
   "version": "1.0.0",
-  "description": "一个运行在 Windows + WSL 上的本地、自托管微信智能简报系统。",
+  "description": "一个本地、自托管的智能新闻简报系统。",
   "main": "index.js",
   "directories": {
     "test": "tests"

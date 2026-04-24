@@ -1,9 +1,11 @@
+name: omninewsflow
+
 services:
   api:
     build:
       context: ./apps/api
       dockerfile: Dockerfile
-    container_name: embodied-news-api
+    container_name: omninewsflow-api
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -20,14 +22,14 @@ services:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
     networks:
-      - embodied-news-network
+      - omninewsflow-network
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
 
   web:
     build:
       context: ./apps/web
       dockerfile: Dockerfile
-    container_name: embodied-news-web
+    container_name: omninewsflow-web
     restart: unless-stopped
     ports:
       - "${WEB_PORT:-3000}:3000"
@@ -39,11 +41,11 @@ services:
     depends_on:
       - api
     networks:
-      - embodied-news-network
+      - omninewsflow-network
 
   wechat-adapter:
     image: tmwgsicp/wechat-download-api:latest
-    container_name: embodied-news-wechat-adapter
+    container_name: omninewsflow-wechat-adapter
     restart: unless-stopped
     ports:
       - "5000:5000"
@@ -53,7 +55,7 @@ services:
       - wechat_data:/app/data
       - /etc/localtime:/etc/localtime:ro
     networks:
-      - embodied-news-network
+      - omninewsflow-network
     environment:
       - PORT=5000
       - HOST=0.0.0.0
@@ -61,7 +63,7 @@ services:
 
   nginx:
     image: nginx:alpine
-    container_name: embodied-news-nginx
+    container_name: omninewsflow-nginx
     restart: unless-stopped
     ports:
       - "${NGINX_PORT:-80}:80"
@@ -73,12 +75,13 @@ services:
       - web
       - api
     networks:
-      - embodied-news-network
+      - omninewsflow-network
     profiles:
       - nginx
 
 networks:
-  embodied-news-network:
+  omninewsflow-network:
+    name: omninewsflow-network
     driver: bridge
 
 volumes:

@@ -7,8 +7,8 @@ const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
   title: {
-    default: "微信新闻智能体",
-    template: "%s | 微信新闻智能体",
+    default: "OmniNewsFlow",
+    template: "%s | OmniNewsFlow",
   },
   description: "本地微信智能简报系统",
   icons: {

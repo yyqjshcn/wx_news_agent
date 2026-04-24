@@ -5,7 +5,7 @@ from functools import lru_cache
 
 class Settings(BaseSettings):
     REDIS_URL: str = "redis://redis:6379/0"
-    DATABASE_URL: str = "postgresql://embodied_news:embodied_news_password@postgres:5432/embodied_news"
+    DATABASE_URL: str = "postgresql://omninewsflow:omninewsflow_password@postgres:5432/omninewsflow"
     WECHAT_ADAPTER_URL: str = "http://wechat-adapter:8080"
 
     class Config:
@@ -20,7 +20,7 @@ def get_settings():
 settings = get_settings()
 
 celery_app = Celery(
-    "embodied_news",
+    "omninewsflow",
     broker=settings.REDIS_URL,
     backend=settings.REDIS_URL,
 )

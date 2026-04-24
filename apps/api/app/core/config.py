@@ -3,7 +3,7 @@ from functools import lru_cache
 
 
 class Settings(BaseSettings):
-    APP_NAME: str = "embodied-news-agent"
+    APP_NAME: str = "omninewsflow"
     APP_ENV: str = "development"
     SECRET_KEY: str = "change-me-to-a-random-string"
 

@@ -21,7 +21,7 @@ import { useState } from "react";
 const navItems = [
   { href: "/", label: "仪表盘", icon: LayoutDashboard },
   { href: "/wechat", label: "微信登录", icon: MessageSquare },
-  { href: "/accounts", label: "公众号管理", icon: Users },
+  { href: "/accounts", label: "来源管理", icon: Users },
   { href: "/keywords", label: "关键词管理", icon: KeyRound },
   { href: "/providers", label: "模型配置", icon: Settings },
   { href: "/workflows", label: "工作流", icon: Workflow },
@@ -50,8 +50,8 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         }`}
       >
         <div className="p-6 border-b">
-          <h1 className="text-lg font-bold">微信新闻</h1>
-          <p className="text-xs text-gray-500">智能体</p>
+          <h1 className="text-lg font-bold">OmniNewsFlow</h1>
+          <p className="text-xs text-gray-500">智能新闻简报系统</p>
         </div>
         <nav className="p-4 space-y-1">
           {navItems.map((item) => {

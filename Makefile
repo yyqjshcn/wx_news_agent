@@ -1,7 +1,7 @@
 .PHONY: help up down build dev-api dev-web dev-worker migrate reset logs clean
 
 help:
-	@echo "Embodied News Agent - Available commands:"
+	@echo "OmniNewsFlow - Available commands:"
 	@echo ""
 	@echo "  make up          Start all services (docker compose)"
 	@echo "  make down        Stop all services"

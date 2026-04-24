@@ -29,7 +29,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Embodied News Agent API",
+    title="OmniNewsFlow API",
     description="Local WeChat intelligence briefing system",
     version="0.1.0",
     lifespan=lifespan,
