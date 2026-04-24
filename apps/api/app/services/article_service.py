@@ -154,7 +154,7 @@ async def get_digests(
     query = select(DailyDigest)
     if status:
         query = query.where(DailyDigest.status == status)
-    query = query.order_by(DailyDigest.digest_date.desc()).offset(skip).limit(limit)
+    query = query.order_by(DailyDigest.generated_at.desc()).offset(skip).limit(limit)
     result = await db.execute(query)
     return result.scalars().all()
 

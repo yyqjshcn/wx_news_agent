@@ -598,32 +598,18 @@ def _do_generate_digest(workflow_id: str) -> dict:
 
         content_md = _generate_digest_content(events, digest_provider, session)
 
-        existing = session.execute(
-            select(DailyDigest).where(DailyDigest.digest_date == today)
-        ).scalar_one_or_none()
-
-        if existing:
-            existing.content_markdown = content_md
-            existing.item_count = len(events)
-            existing.status = "published"
-            existing.generated_at = datetime.now(timezone.utc)
-            if digest_provider:
-                existing.llm_provider_id = digest_provider.id
-                existing.llm_model = digest_provider.default_model
-            digest = existing
-        else:
-            digest = DailyDigest(
-                id=str(__import__("uuid").uuid4()),
-                digest_date=today,
-                content_markdown=content_md,
-                item_count=len(events),
-                status="published",
-                generated_at=datetime.now(timezone.utc),
-            )
-            if digest_provider:
-                digest.llm_provider_id = digest_provider.id
-                digest.llm_model = digest_provider.default_model
-            session.add(digest)
+        digest = DailyDigest(
+            id=str(__import__("uuid").uuid4()),
+            digest_date=today,
+            content_markdown=content_md,
+            item_count=len(events),
+            status="published",
+            generated_at=datetime.now(timezone.utc),
+        )
+        if digest_provider:
+            digest.llm_provider_id = digest_provider.id
+            digest.llm_model = digest_provider.default_model
+        session.add(digest)
 
         session.commit()
 
