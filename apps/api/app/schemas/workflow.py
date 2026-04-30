@@ -14,7 +14,7 @@ def ensure_utc(v: datetime | None) -> datetime | None:
 class WorkflowBase(BaseModel):
     workflow_name: str
     workflow_type: str
-    cron_expression: str
+    cron_expression: Optional[str] = ""
     timezone: str = "Asia/Shanghai"
     enabled: bool = True
     config_json: dict = {}

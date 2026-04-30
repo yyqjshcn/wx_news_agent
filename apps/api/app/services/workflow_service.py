@@ -7,6 +7,7 @@ from app.models.workflow import Workflow, WorkflowRun, WorkflowType, WorkflowRun
 from app.schemas.workflow import WorkflowCreate, WorkflowUpdate
 
 WORKFLOW_ORDER = {
+    "sequential_pipeline": -1,
     "login_health_check": 0,
     "daily_ingest": 1,
     "rss_ingest": 2,

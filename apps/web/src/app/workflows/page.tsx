@@ -18,8 +18,18 @@ export default function WorkflowsPage() {
   const [expandedWorkflows, setExpandedWorkflows] = useState<Set<string>>(new Set());
   const [runsMap, setRunsMap] = useState<Record<string, RunsState>>({});
   const [runningIds, setRunningIds] = useState<Set<string>>(new Set());
+  const [liveProgress, setLiveProgress] = useState<Record<string, { stepLabel: string; stepsCompleted: number; totalSteps: number }>>({});
   const pollRef = useRef<Record<string, ReturnType<typeof setInterval>>>({});
   const queryClient = useQueryClient();
+
+  const [form, setForm] = useState({
+    workflow_name: "",
+    workflow_type: "daily_ingest",
+    cron_expression: "0 8 * * *",
+    timezone: "Asia/Shanghai",
+    enabled: true,
+    config_json: {},
+  });
 
   const { data: workflows } = useQuery({
     queryKey: ["workflows"],
@@ -155,6 +165,17 @@ export default function WorkflowsPage() {
       try {
         const runsData = await api.get(`/api/workflows/${workflowId}/runs`);
         const latest = runsData?.[0];
+        if (latest && latest.status === "running" && latest.summary_json?.is_pipeline) {
+          const s = latest.summary_json;
+          setLiveProgress((prev) => ({
+            ...prev,
+            [workflowId]: {
+              stepLabel: s.current_step_label || "运行中",
+              stepsCompleted: s.steps_completed || 0,
+              totalSteps: s.total_steps || 4,
+            },
+          }));
+        }
         if (latest && latest.status !== "pending" && latest.status !== "running") {
           clearInterval(pollRef.current[workflowId]);
           delete pollRef.current[workflowId];
@@ -162,6 +183,11 @@ export default function WorkflowsPage() {
             const next = new Set(prev);
             next.delete(workflowId);
             return next;
+          });
+          setLiveProgress((prev) => {
+            const p = { ...prev };
+            delete p[workflowId];
+            return p;
           });
           queryClient.invalidateQueries({ queryKey: ["workflows"] });
           invalidateRuns(workflowId);
@@ -183,6 +209,56 @@ export default function WorkflowsPage() {
       Object.values(pollRef.current).forEach(clearInterval);
     };
   }, []);
+
+  useEffect(() => {
+    if (!workflows) return;
+    workflows.forEach((w: any) => {
+      if (w.last_status === "running" && !pollRef.current[w.id]) {
+        setRunningIds((prev) => new Set(prev).add(w.id));
+        pollRef.current[w.id] = setInterval(async () => {
+          try {
+            const runsData = await api.get(`/api/workflows/${w.id}/runs`);
+            const latest = runsData?.[0];
+            if (latest && latest.status === "running" && latest.summary_json?.is_pipeline) {
+              const s = latest.summary_json;
+              setLiveProgress((prev) => ({
+                ...prev,
+                [w.id]: {
+                  stepLabel: s.current_step_label || "运行中",
+                  stepsCompleted: s.steps_completed || 0,
+                  totalSteps: s.total_steps || 4,
+                },
+              }));
+            }
+            if (latest && latest.status !== "pending" && latest.status !== "running") {
+              clearInterval(pollRef.current[w.id]);
+              delete pollRef.current[w.id];
+              setRunningIds((prev) => {
+                const next = new Set(prev);
+                next.delete(w.id);
+                return next;
+              });
+              setLiveProgress((prev) => {
+                const p = { ...prev };
+                delete p[w.id];
+                return p;
+              });
+              queryClient.invalidateQueries({ queryKey: ["workflows"] });
+              invalidateRuns(w.id);
+            }
+          } catch {
+            clearInterval(pollRef.current[w.id]);
+            delete pollRef.current[w.id];
+            setRunningIds((prev) => {
+              const next = new Set(prev);
+              next.delete(w.id);
+              return next;
+            });
+          }
+        }, 2000);
+      }
+    });
+  }, [workflows]);
 
   const resetForm = () =>
     setForm({
@@ -217,6 +293,7 @@ export default function WorkflowsPage() {
   };
 
   const workflowTypes = [
+    { value: "sequential_pipeline", label: "每日完整流程" },
     { value: "daily_ingest", label: "每日采集" },
     { value: "rss_ingest", label: "RSS采集" },
     { value: "midday_refresh", label: "午间刷新" },
@@ -279,17 +356,16 @@ export default function WorkflowsPage() {
             </div>
             <div>
               <label className="block text-sm font-medium mb-1">
-                Cron 表达式 *
+                Cron 表达式
               </label>
               <input
                 type="text"
-                required
                 value={form.cron_expression}
                 onChange={(e) =>
                   setForm({ ...form, cron_expression: e.target.value })
                 }
                 className="w-full px-3 py-2 border rounded-md text-sm"
-                placeholder="0 8 * * *"
+                placeholder="留空则不调度定时运行"
               />
             </div>
             <div>
@@ -367,7 +443,11 @@ export default function WorkflowsPage() {
                       {runningIds.has(w.id) ? (
                         <div className="flex items-center gap-2 text-blue-600">
                           <Loader2 size={14} className="animate-spin" />
-                          <span>运行中...</span>
+                          <span>
+                            {liveProgress[w.id]
+                              ? `${liveProgress[w.id].stepLabel} (${liveProgress[w.id].stepsCompleted}/${liveProgress[w.id].totalSteps})`
+                              : "运行中"}
+                          </span>
                         </div>
                       ) : w.last_run_at ? (
                         <div className="text-gray-500">

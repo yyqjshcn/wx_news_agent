@@ -93,6 +93,18 @@ async def _mark_run_finished(
         await session.close()
 
 
+async def _update_run_progress(run_id: str, progress: dict):
+    session = async_session()
+    try:
+        run = await session.get(WorkflowRun, run_id)
+        if not run:
+            return
+        run.summary_json = {**(run.summary_json or {}), **progress}
+        await session.commit()
+    finally:
+        await session.close()
+
+
 async def _execute_workflow(run_id: str, label: str, payload_factory):
     workflow_id = await _mark_run_started(run_id)
     logger.info("Starting %s workflow run %s", label, run_id)
@@ -1324,6 +1336,7 @@ async def do_generate_digest(workflow_id: str) -> dict:
 
         return {
             "workflow_id": workflow_id,
+            "status": "completed",
             "digest_date": digest_date.strftime("%Y-%m-%d"),
             "item_count": len(events),
             "digest_id": digest.id,
@@ -1335,6 +1348,170 @@ async def do_generate_digest(workflow_id: str) -> dict:
         await session.close()
 
 
+PIPELINE_STEPS = [
+    {"key": "daily_ingest", "label": "正在执行每日采集", "fn": do_daily_ingest},
+    {"key": "rss_ingest", "label": "正在执行 RSS 采集", "fn": do_rss_ingest},
+    {"key": "classify_pending_articles", "label": "正在执行文章分类", "fn": do_classify_articles},
+    {"key": "generate_daily_digest", "label": "正在生成摘要", "fn": do_generate_digest},
+]
+
+
+async def _get_pipeline_run_id(workflow_id: str) -> str:
+    session = async_session()
+    try:
+        from sqlalchemy import desc
+        result = await session.execute(
+            select(WorkflowRun)
+            .where(
+                WorkflowRun.workflow_id == workflow_id,
+                WorkflowRun.status.in_([WorkflowRunStatus.PENDING, WorkflowRunStatus.RUNNING]),
+            )
+            .order_by(desc(WorkflowRun.created_at))
+            .limit(1)
+        )
+        run = result.scalar_one_or_none()
+        if run:
+            return run.id
+    finally:
+        await session.close()
+    fallback = str(uuid.uuid4())
+    s = async_session()
+    try:
+        wf = await s.get(Workflow, workflow_id)
+        run = WorkflowRun(
+            id=fallback,
+            workflow_id=workflow_id,
+            trigger_type="scheduled",
+            status=WorkflowRunStatus.RUNNING,
+            started_at=datetime.now(timezone.utc),
+        )
+        s.add(run)
+        await s.commit()
+    finally:
+        await s.close()
+    return fallback
+
+
+async def run_sequential_pipeline(workflow_id: str) -> dict:
+    pipeline_run_id = await _get_pipeline_run_id(workflow_id)
+    started = datetime.now(timezone.utc)
+    step_results = []
+    completed_count = 0
+    total_count = len(PIPELINE_STEPS)
+    error_msg = None
+
+    await _update_run_progress(pipeline_run_id, {
+        "is_pipeline": True,
+        "current_step": "",
+        "current_step_label": "",
+        "steps_completed": 0,
+        "total_steps": total_count,
+        "step_results": [],
+    })
+
+    for idx, step in enumerate(PIPELINE_STEPS):
+        step_key = step["key"]
+        step_label = step["label"]
+        step_fn = step["fn"]
+
+        logger.info(f"Pipeline {pipeline_run_id}: starting step {idx+1}/{total_count} - {step_key}")
+
+        await _update_run_progress(pipeline_run_id, {
+            "current_step": step_key,
+            "current_step_label": step_label,
+            "steps_completed": completed_count,
+            "total_steps": total_count,
+        })
+
+        step_result = None
+        step_success = False
+
+        for attempt in range(1, 3):
+            try:
+                result = await step_fn(workflow_id)
+                step_status = (result or {}).get("status", "failed")
+                step_success = step_status in ("completed", "checked", "success", "partial")
+                step_result = result
+
+                if not step_success:
+                    msg = result.get("message", f"Step {step_key} returned status: {step_status}")
+                    logger.warning(f"Pipeline {pipeline_run_id}: step {step_key} not successful (attempt {attempt}): {msg}")
+                    if attempt < 2:
+                        await asyncio.sleep(2)
+                        continue
+                else:
+                    logger.info(f"Pipeline {pipeline_run_id}: step {step_key} succeeded (attempt {attempt})")
+                    break
+            except Exception as e:
+                logger.warning(f"Pipeline {pipeline_run_id}: step {step_key} exception (attempt {attempt}): {e}")
+                if attempt < 2:
+                    await asyncio.sleep(2)
+
+        step_info = {
+            "step": step_key,
+            "success": step_success,
+            "result_summary": {
+                "articles_fetched": step_result.get("articles_fetched", 0),
+                "articles_stored": step_result.get("articles_stored", 0),
+                "classified_count": step_result.get("classified_count", 0),
+                "item_count": step_result.get("item_count", 0),
+            } if step_result else None,
+        }
+        step_results.append(step_info)
+        completed_count += 1 if step_success else 0
+
+        await _update_run_progress(pipeline_run_id, {
+            "steps_completed": completed_count,
+            "step_results": step_results,
+        })
+
+        if not step_success:
+            error_msg = f"Pipeline failed at step: {step_key}"
+            break
+
+    finished_at = datetime.now(timezone.utc)
+    duration_ms = int((finished_at - started).total_seconds() * 1000)
+    all_success = all(s["success"] for s in step_results)
+
+    final_summary = {
+        "is_pipeline": True,
+        "current_step": "",
+        "current_step_label": "",
+        "status": "completed" if all_success else "failed",
+        "steps_completed": completed_count,
+        "total_steps": total_count,
+        "step_results": step_results,
+        "duration_ms": duration_ms,
+        "timestamp": finished_at.isoformat(),
+    }
+
+    s = async_session()
+    try:
+        run = await s.get(WorkflowRun, pipeline_run_id)
+        if run:
+            run.status = WorkflowRunStatus.SUCCESS if all_success else WorkflowRunStatus.FAILED
+            if not run.started_at:
+                run.started_at = started
+            run.finished_at = finished_at
+            run.duration_ms = duration_ms
+            run.summary_json = final_summary
+            if not all_success:
+                run.error_message = error_msg
+
+            wf = await s.get(Workflow, workflow_id)
+            if wf:
+                wf.last_run_at = finished_at
+                wf.last_status = run.status.value
+                wf.updated_at = finished_at
+                s.add(wf)
+
+            await s.commit()
+    finally:
+        await s.close()
+
+    return final_summary
+
+
 TASK_MAP = {
     WorkflowType.DAILY_INGEST: do_daily_ingest,
     WorkflowType.MIDDAY_REFRESH: do_daily_ingest,
@@ -1343,6 +1520,7 @@ TASK_MAP = {
     WorkflowType.RETRY_FAILED: do_daily_ingest,
     WorkflowType.LOGIN_HEALTH_CHECK: do_login_health_check,
     WorkflowType.RSS_INGEST: do_rss_ingest,
+    WorkflowType.SEQUENTIAL_PIPELINE: run_sequential_pipeline,
 }
 
 

@@ -14,6 +14,7 @@ class WorkflowType(str, enum.Enum):
     RETRY_FAILED = "retry_failed_jobs"
     LOGIN_HEALTH_CHECK = "login_health_check"
     RSS_INGEST = "rss_ingest"
+    SEQUENTIAL_PIPELINE = "sequential_pipeline"
 
 
 class WorkflowRunStatus(str, enum.Enum):
@@ -36,7 +37,7 @@ class Workflow(Base):
     workflow_name = Column(String, nullable=False)
     workflow_type = Column(SAEnum(WorkflowType), nullable=False)
     enabled = Column(Boolean, default=True)
-    cron_expression = Column(String, nullable=False)
+    cron_expression = Column(String, nullable=True)
     timezone = Column(String, default="Asia/Shanghai")
     config_json = Column(JSON, default=dict)
     last_run_at = Column(DateTime(timezone=True), nullable=True)

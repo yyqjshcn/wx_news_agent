@@ -49,30 +49,43 @@ async def _execute_workflow(run_id: str, label: str, task_fn):
             if not run:
                 return
 
-            finished_at = datetime.now(timezone.utc)
-            # Check summary for business-level status instead of assuming SUCCESS
-            summary_status = (result or {}).get("status")
-            if summary_status in ("failed",):
-                run.status = WorkflowRunStatus.FAILED
-                workflow_last_status = WorkflowRunStatus.FAILED.value
+            is_pipeline = (result or {}).get("is_pipeline")
+
+            if not is_pipeline:
+                finished_at = datetime.now(timezone.utc)
+                # Check summary for business-level status instead of assuming SUCCESS
+                summary_status = (result or {}).get("status")
+                if summary_status in ("failed",):
+                    run.status = WorkflowRunStatus.FAILED
+                    workflow_last_status = WorkflowRunStatus.FAILED.value
+                else:
+                    run.status = WorkflowRunStatus.SUCCESS
+                    workflow_last_status = WorkflowRunStatus.SUCCESS.value
+
+                run.finished_at = finished_at
+                run.summary_json = result or {}
+                started_at = _ensure_tz(run.started_at)
+                if started_at:
+                    run.duration_ms = int((finished_at - started_at).total_seconds() * 1000)
+
+                workflow = await session.get(Workflow, workflow_id)
+                if workflow:
+                    workflow.last_run_at = finished_at
+                    workflow.last_status = workflow_last_status
+                    workflow.updated_at = finished_at
+                    session.add(workflow)
+
+                await session.commit()
             else:
-                run.status = WorkflowRunStatus.SUCCESS
-                workflow_last_status = WorkflowRunStatus.SUCCESS.value
-
-            run.finished_at = finished_at
-            run.summary_json = result or {}
-            started_at = _ensure_tz(run.started_at)
-            if started_at:
-                run.duration_ms = int((finished_at - started_at).total_seconds() * 1000)
-
-            workflow = await session.get(Workflow, workflow_id)
-            if workflow:
-                workflow.last_run_at = finished_at
-                workflow.last_status = workflow_last_status
-                workflow.updated_at = finished_at
-                session.add(workflow)
-
-            await session.commit()
+                workflow = await session.get(Workflow, workflow_id)
+                if workflow:
+                    finished_at = datetime.now(timezone.utc)
+                    pipeline_status = (result or {}).get("status", "failed")
+                    workflow.last_run_at = finished_at
+                    workflow.last_status = WorkflowRunStatus.SUCCESS.value if pipeline_status == "completed" else WorkflowRunStatus.FAILED.value
+                    workflow.updated_at = finished_at
+                    session.add(workflow)
+                await session.commit()
         finally:
             await session.close()
             
