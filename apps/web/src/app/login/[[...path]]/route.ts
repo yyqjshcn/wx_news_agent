@@ -11,7 +11,7 @@ export async function POST(request: NextRequest) {
 }
 
 async function proxyRequest(request: NextRequest, method: string) {
-  const restPath = request.nextUrl.pathname.replace(/^\/api\/login/, "");
+  const restPath = request.nextUrl.pathname.replace(/^\/login/, "");
   const url = `${WECHAT_ADAPTER}${restPath}${request.nextUrl.search}`;
 
   const headers: Record<string, string> = {};
@@ -31,31 +31,12 @@ async function proxyRequest(request: NextRequest, method: string) {
     const response = await fetch(url, { method, headers, body, redirect: "manual" });
 
     const responseHeaders = new Headers();
-
-    // Collect set-cookie headers separately
-    const setCookieHeaders: string[] = [];
-    for (const [key, value] of response.headers.entries()) {
-      if (key.toLowerCase() === "set-cookie") {
-        // Headers.entries() may have merged cookies with ","
-        // Split by ", " but need to be careful about cookie values containing commas
-        // Use getSetCookie() if available, otherwise parse manually
-        setCookieHeaders.push(value);
-      }
-    }
-
-    // Use getSetCookie() for proper cookie handling (Node.js 18+)
-    const cookies = response.headers.getSetCookie?.() ?? setCookieHeaders;
-    cookies.forEach((cookie: string) => {
-      responseHeaders.append("set-cookie", cookie);
-    });
-
-    // Set all other headers
-    for (const [key, value] of response.headers.entries()) {
+    response.headers.forEach((value, key) => {
       const lower = key.toLowerCase();
-      if (!["content-encoding", "content-length", "transfer-encoding", "set-cookie"].includes(lower)) {
+      if (!["content-encoding", "content-length", "transfer-encoding"].includes(lower)) {
         responseHeaders.set(key, value);
       }
-    }
+    });
 
     const data = await response.arrayBuffer();
 

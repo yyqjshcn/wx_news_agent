@@ -2,11 +2,16 @@
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { RefreshCw, AlertCircle, CheckCircle, ExternalLink, Loader2 } from "lucide-react";
 
 export default function WeChatPage() {
   const queryClient = useQueryClient();
+  const [adapterLoginUrl, setAdapterLoginUrl] = useState("//localhost:5000/login.html");
+
+  useEffect(() => {
+    setAdapterLoginUrl(`//${window.location.hostname}:5000/login.html`);
+  }, []);
 
   const { data: status, isLoading } = useQuery({
     queryKey: ["wechat-status"],
@@ -98,7 +103,7 @@ export default function WeChatPage() {
               刷新状态
             </button>
             <a
-              href="http://localhost:5000/login"
+              href={adapterLoginUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-2 px-4 py-2 bg-gray-900 text-white rounded-md text-sm hover:bg-gray-800"
@@ -120,7 +125,7 @@ export default function WeChatPage() {
                 在适配器页面完成扫码登录后，返回此页面刷新状态
               </p>
               <a
-                href="http://localhost:5000/login"
+                href={adapterLoginUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-2 px-6 py-3 bg-gray-900 text-white rounded-md text-sm hover:bg-gray-800"
