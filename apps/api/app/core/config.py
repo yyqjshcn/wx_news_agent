@@ -23,6 +23,8 @@ class Settings(BaseSettings):
 
     LOG_LEVEL: str = "INFO"
 
+    WORKFLOW_FAIL_WEBHOOK_URL: str = ""
+
     class Config:
         env_file = ".env"
 

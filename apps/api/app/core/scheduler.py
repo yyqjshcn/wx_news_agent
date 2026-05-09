@@ -27,6 +27,7 @@ from app.models.rss_feed import RssFeed
 from app.core.security import decrypt_api_key
 from app.services.rss_service import parse_feed
 from app.services import event_service
+from app.services.workflow_alert_service import send_workflow_failure_alert
 
 logger = logging.getLogger(__name__)
 
@@ -105,17 +106,38 @@ async def _update_run_progress(run_id: str, progress: dict):
         await session.close()
 
 
+async def _send_alert_if_needed(run_id: str, error_message: str):
+    """Send failure alert if webhook is configured."""
+    try:
+        session = async_session()
+        try:
+            run = await session.get(WorkflowRun, run_id)
+            if not run:
+                return
+            workflow = await session.get(Workflow, run.workflow_id)
+            if not workflow:
+                return
+            await send_workflow_failure_alert(
+                workflow, run, error_message,
+                duration_ms=run.duration_ms,
+            )
+        finally:
+            await session.close()
+    except Exception as e:
+        logger.error(f"Failed to send workflow failure alert for run {run_id}: {e}")
+
+
 async def _execute_workflow(run_id: str, label: str, payload_factory):
     workflow_id = await _mark_run_started(run_id)
     logger.info("Starting %s workflow run %s", label, run_id)
     try:
         result = await payload_factory(workflow_id)
-        # Check summary for business-level status instead of assuming SUCCESS
         summary_status = (result or {}).get("status")
         if summary_status in ("failed",):
             await _mark_run_finished(
                 run_id, WorkflowRunStatus.FAILED, summary=result,
             )
+            await _send_alert_if_needed(run_id, result.get("message", "Step returned failed status"))
         else:
             await _mark_run_finished(run_id, WorkflowRunStatus.SUCCESS, summary=result)
         return result
@@ -126,6 +148,7 @@ async def _execute_workflow(run_id: str, label: str, payload_factory):
             WorkflowRunStatus.FAILED,
             error_message=str(e),
         )
+        await _send_alert_if_needed(run_id, str(e))
         raise
 
 
