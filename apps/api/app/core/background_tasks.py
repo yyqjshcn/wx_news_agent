@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from app.db.database import async_session
 from app.models.workflow import Workflow, WorkflowRun, WorkflowRunStatus
 from app.services.workflow_alert_service import send_workflow_failure_alert
+from app.services.article_service import log_system
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,8 @@ async def _execute_workflow(run_id: str, label: str, task_fn):
         run.started_at = datetime.now(timezone.utc)
         await session.commit()
 
+    await log_system("INFO", "workflow", f"工作流开始: {label}", {"run_id": run_id})
+
     try:
         result = await task_fn(workflow_id)
 
@@ -73,8 +76,10 @@ async def _execute_workflow(run_id: str, label: str, task_fn):
                 run.finished_at = finished_at
                 run.summary_json = result or {}
                 started_at = _ensure_tz(run.started_at)
+                duration_ms = None
                 if started_at:
-                    run.duration_ms = int((finished_at - started_at).total_seconds() * 1000)
+                    duration_ms = int((finished_at - started_at).total_seconds() * 1000)
+                    run.duration_ms = duration_ms
 
                 workflow = await session.get(Workflow, workflow_id)
                 if workflow:
@@ -84,6 +89,11 @@ async def _execute_workflow(run_id: str, label: str, task_fn):
                     session.add(workflow)
 
                 await session.commit()
+
+                if is_failed:
+                    await log_system("ERROR", "workflow", f"工作流失败: {label}", {"run_id": run_id, "error": (result or {}).get("message", ""), "duration_ms": duration_ms})
+                else:
+                    await log_system("INFO", "workflow", f"工作流完成: {label}", {"run_id": run_id, "duration_ms": duration_ms})
             else:
                 workflow = await session.get(Workflow, workflow_id)
                 if workflow:
@@ -131,6 +141,8 @@ async def _execute_workflow(run_id: str, label: str, task_fn):
                 session.add(workflow)
 
             await session.commit()
+
+        await log_system("ERROR", "workflow", f"工作流失败: {label}", {"run_id": run_id, "error": error_message, "duration_ms": alert_duration_ms})
 
         try:
             if alert_workflow_id:

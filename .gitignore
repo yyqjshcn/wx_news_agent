@@ -66,3 +66,5 @@ apps/api/prompts/*.json
 !apps/api/prompts/*.template.json
 apps/api/templates/*.html
 !apps/api/templates/*.template.html
+
+logo.svg

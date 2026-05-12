@@ -22,11 +22,12 @@ async def get_articles(
     source_type: str | None = None,
     start_date: datetime | None = None,
     end_date: datetime | None = None,
+    query: str | None = None,
 ) -> list[RawArticle]:
-    query = select(RawArticle)
+    query_stmt = select(RawArticle)
     if event_type:
-        query = (
-            query.outerjoin(ArticleEvent, ArticleEvent.article_id == RawArticle.id)
+        query_stmt = (
+            query_stmt.outerjoin(ArticleEvent, ArticleEvent.article_id == RawArticle.id)
             .outerjoin(Event, Event.id == ArticleEvent.event_id)
             .where(
                 or_(
@@ -37,19 +38,22 @@ async def get_articles(
             .distinct()
         )
     if account_name:
-        query = query.where(RawArticle.account_name == account_name)
+        query_stmt = query_stmt.where(RawArticle.account_name == account_name)
     if status:
-        query = query.where(RawArticle.status == status)
+        query_stmt = query_stmt.where(RawArticle.status == status)
     if is_relevant is not None:
-        query = query.where(RawArticle.is_relevant == is_relevant)
+        query_stmt = query_stmt.where(RawArticle.is_relevant == is_relevant)
     if source_type:
-        query = query.where(RawArticle.source_type == source_type)
+        query_stmt = query_stmt.where(RawArticle.source_type == source_type)
     if start_date:
-        query = query.where(RawArticle.publish_time >= start_date)
+        query_stmt = query_stmt.where(RawArticle.publish_time >= start_date)
     if end_date:
-        query = query.where(RawArticle.publish_time <= end_date)
-    query = query.order_by(RawArticle.created_at.desc()).offset(skip).limit(limit)
-    result = await db.execute(query)
+        query_stmt = query_stmt.where(RawArticle.publish_time <= end_date)
+    if query and query.strip():
+        pattern = f"%{query.strip()}%"
+        query_stmt = query_stmt.where(RawArticle.title.ilike(pattern))
+    query_stmt = query_stmt.order_by(RawArticle.created_at.desc()).offset(skip).limit(limit)
+    result = await db.execute(query_stmt)
     return result.scalars().all()
 
 
@@ -62,11 +66,12 @@ async def count_articles(
     source_type: str | None = None,
     start_date: datetime | None = None,
     end_date: datetime | None = None,
+    query: str | None = None,
 ) -> int:
-    query = select(func.count(func.distinct(RawArticle.id)))
+    query_stmt = select(func.count(func.distinct(RawArticle.id)))
     if event_type:
-        query = (
-            query.outerjoin(ArticleEvent, ArticleEvent.article_id == RawArticle.id)
+        query_stmt = (
+            query_stmt.outerjoin(ArticleEvent, ArticleEvent.article_id == RawArticle.id)
             .outerjoin(Event, Event.id == ArticleEvent.event_id)
             .where(
                 or_(
@@ -76,18 +81,21 @@ async def count_articles(
             )
         )
     if account_name:
-        query = query.where(RawArticle.account_name == account_name)
+        query_stmt = query_stmt.where(RawArticle.account_name == account_name)
     if status:
-        query = query.where(RawArticle.status == status)
+        query_stmt = query_stmt.where(RawArticle.status == status)
     if is_relevant is not None:
-        query = query.where(RawArticle.is_relevant == is_relevant)
+        query_stmt = query_stmt.where(RawArticle.is_relevant == is_relevant)
     if source_type:
-        query = query.where(RawArticle.source_type == source_type)
+        query_stmt = query_stmt.where(RawArticle.source_type == source_type)
     if start_date:
-        query = query.where(RawArticle.publish_time >= start_date)
+        query_stmt = query_stmt.where(RawArticle.publish_time >= start_date)
     if end_date:
-        query = query.where(RawArticle.publish_time <= end_date)
-    result = await db.execute(query)
+        query_stmt = query_stmt.where(RawArticle.publish_time <= end_date)
+    if query and query.strip():
+        pattern = f"%{query.strip()}%"
+        query_stmt = query_stmt.where(RawArticle.title.ilike(pattern))
+    result = await db.execute(query_stmt)
     return result.scalar() or 0
 
 
@@ -204,6 +212,18 @@ async def create_log(db: AsyncSession, level: str, module: str, message: str, pa
     await db.commit()
     await db.refresh(log)
     return log
+
+
+async def log_system(level: str, module: str, message: str, payload: dict | None = None):
+    """Convenience wrapper that manages its own DB session."""
+    import logging
+    from app.db.database import async_session
+    _logger = logging.getLogger(__name__)
+    try:
+        async with async_session() as db:
+            await create_log(db, level, module, message, payload)
+    except Exception:
+        _logger.warning(f"Failed to write system log [{module}] {message[:100]}")
 
 
 async def get_dashboard_stats(db: AsyncSession) -> dict:

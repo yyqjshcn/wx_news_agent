@@ -1162,6 +1162,85 @@ async def get_digest_candidate_events(
     return await _serialize_digest_events(db, fallback_events)
 
 
+async def _select_events_by_date_range(
+    db: AsyncSession,
+    *,
+    date_start: datetime,
+    date_end: datetime,
+) -> list[Event]:
+    window_start = _coerce_datetime(date_start)
+    window_end = _coerce_datetime(date_end)
+    if window_start is None or window_end is None:
+        return []
+
+    if window_start > window_end:
+        window_start, window_end = window_end, window_start
+
+    result = await db.execute(
+        select(Event)
+        .distinct()
+        .join(ArticleEvent, ArticleEvent.event_id == Event.id)
+        .join(RawArticle, RawArticle.id == ArticleEvent.article_id)
+        .where(
+            Event.status == "active",
+            RawArticle.is_relevant == True,
+            RawArticle.publish_time >= window_start,
+            RawArticle.publish_time <= window_end,
+        )
+        .order_by(Event.importance.desc(), Event.updated_at.desc())
+    )
+    return result.scalars().all()
+
+
+async def _select_events_by_article_ids(
+    db: AsyncSession,
+    *,
+    article_ids: list[str],
+) -> list[Event]:
+    if not article_ids:
+        return []
+
+    result = await db.execute(
+        select(Event)
+        .distinct()
+        .join(ArticleEvent, ArticleEvent.event_id == Event.id)
+        .where(
+            Event.status == "active",
+            ArticleEvent.article_id.in_(article_ids),
+        )
+        .order_by(Event.importance.desc(), Event.updated_at.desc())
+    )
+    return result.scalars().all()
+
+
+async def get_events_by_custom_criteria(
+    db: AsyncSession,
+    *,
+    date_start: datetime | None = None,
+    date_end: datetime | None = None,
+    article_ids: list[str] | None = None,
+) -> list[dict]:
+    events: list[Event] = []
+
+    if article_ids:
+        events = await _select_events_by_article_ids(db, article_ids=article_ids)
+    elif date_start is not None and date_end is not None:
+        events = await _select_events_by_date_range(
+            db, date_start=date_start, date_end=date_end
+        )
+
+    if not events:
+        return []
+
+    return await _serialize_digest_events(
+        db,
+        events,
+        window_start=_coerce_datetime(date_start),
+        window_end=_coerce_datetime(date_end),
+        window_end_inclusive=True,
+    )
+
+
 async def migrate_legacy_curated_events(db: AsyncSession) -> dict:
     curated_result = await db.execute(
         select(CuratedEvent, RawArticle)

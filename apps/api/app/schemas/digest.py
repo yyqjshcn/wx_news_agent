@@ -29,6 +29,9 @@ class DigestResponse(BaseModel):
 
 class DigestGenerateRequest(BaseModel):
     digest_date: Optional[datetime] = None
+    date_start: Optional[datetime] = None
+    date_end: Optional[datetime] = None
+    article_ids: Optional[list[str]] = None
     llm_provider_id: Optional[str] = None
     llm_model: Optional[str] = None
 

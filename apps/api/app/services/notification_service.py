@@ -407,7 +407,7 @@ def _build_html_digest(content_markdown: str, digest_date: str, item_count: int,
     for section in sections:
         if section["title"]:
             content_parts.append('<tr><td style="padding: 24px 32px 8px;">')
-            content_parts.append(f'<div style="border-left: 3px solid #1E40AF; padding-left: 12px;">')
+            content_parts.append(f'<div style="border-left: 3px solid #28E7C5; padding-left: 12px;">')
             content_parts.append(f'<h2 style="font-size: 17px; font-weight: 700; color: #1a1a1a; margin: 0 0 4px;">{section["title"]}</h2>')
             if section["intro"].strip():
                 content_parts.append(f'<p style="font-size: 13px; color: #666; margin: 4px 0 0; line-height: 1.5;">{section["intro"].strip()}</p>')
@@ -421,7 +421,7 @@ def _build_html_digest(content_markdown: str, digest_date: str, item_count: int,
         for item in section["items"]:
             content_parts.append('<tr><td style="padding: 6px 32px 6px 44px;">')
             content_parts.append(f'<div style="font-size: 14px; line-height: 1.6;">')
-            content_parts.append(f'<span style="color: #1E40AF; margin-right: 6px;">&#8226;</span>')
+            content_parts.append(f'<span style="color: #28E7C5; margin-right: 6px;">&#8226;</span>')
             content_parts.append(f'<a href="{item["url"]}" style="color: #1a1a1a; text-decoration: underline; font-weight: 600;">{item["title"]}</a>')
             if item["source"]:
                 content_parts.append(f'<span style="color: #999; font-size: 12px; margin-left: 6px;">{item["source"]}</span>')
@@ -431,6 +431,16 @@ def _build_html_digest(content_markdown: str, digest_date: str, item_count: int,
     content_html = "\n".join(content_parts)
 
     # Load email template and substitute variables
+    import base64
+    from pathlib import Path
+    logo_path = Path(__file__).parent.parent.parent / "templates" / "logo.svg"
+    logo_base64 = ""
+    try:
+        logo_data = logo_path.read_bytes()
+        logo_base64 = f"data:image/svg+xml;base64,{base64.b64encode(logo_data).decode()}"
+    except Exception:
+        logger.warning(f"Failed to load logo from {logo_path}")
+
     template = load_template(template_name)
     return template.substitute(
         digest_date=digest_date,
@@ -438,4 +448,5 @@ def _build_html_digest(content_markdown: str, digest_date: str, item_count: int,
         topic_count=str(topic_count),
         source_count=str(len(sources)),
         content_html=content_html,
+        logo_src=logo_base64,
     )

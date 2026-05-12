@@ -1,10 +1,14 @@
-from datetime import datetime
+import uuid
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.database import get_db
+from app.models.digest import DailyDigest
+from app.models.llm_provider import LlmProvider
 from app.schemas.article import ArticleResponse, ArticleReclassifyRequest, ArticleUpdate
 from app.schemas.digest import DigestGenerateRequest, DigestResponse, DigestSendTestRequest
 from app.schemas.event import (
@@ -15,7 +19,7 @@ from app.schemas.event import (
     EventSplitRequest,
     EventUpdate,
 )
-from app.services import article_service, event_service
+from app.services import article_service, event_service, digest_service
 
 router = APIRouter(prefix="/api", tags=["articles", "events", "digests"])
 
@@ -31,6 +35,7 @@ async def list_articles(
     source_type: Optional[str] = None,
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
+    query: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
     articles = await article_service.get_articles(
@@ -44,6 +49,7 @@ async def list_articles(
         source_type,
         start_date,
         end_date,
+        query,
     )
     return await article_service.serialize_articles(db, articles)
 
@@ -57,6 +63,7 @@ async def count_articles(
     source_type: Optional[str] = None,
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
+    query: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
     count = await article_service.count_articles(
@@ -68,6 +75,7 @@ async def count_articles(
         source_type,
         start_date,
         end_date,
+        query,
     )
     return {"count": count}
 
@@ -305,21 +313,90 @@ async def get_digest(digest_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.post("/digests/generate", response_model=DigestResponse)
 async def generate_digest(data: DigestGenerateRequest, db: AsyncSession = Depends(get_db)):
-    digest_date = data.digest_date or datetime.now()
-    digest = await article_service.create_digest(
-        db,
-        {
-            "digest_date": digest_date,
-            "content_markdown": "# Sample Digest\n\nThis is a placeholder digest.",
-            "content_html": "<h1>Sample Digest</h1><p>This is a placeholder digest.</p>",
-            "item_count": 0,
-            "status": "draft",
-            "llm_provider_id": data.llm_provider_id,
-            "llm_model": data.llm_model,
-            "generated_at": datetime.now(),
-        },
+    is_custom = bool(data.date_start or data.article_ids)
+
+    if is_custom:
+        events = await event_service.get_events_by_custom_criteria(
+            db,
+            date_start=data.date_start,
+            date_end=data.date_end,
+            article_ids=data.article_ids,
+        )
+    else:
+        beijing_tz = timezone(timedelta(hours=8))
+        now_beijing = datetime.now(beijing_tz)
+        events = await event_service.get_digest_candidate_events(
+            db,
+            now=now_beijing,
+        )
+
+    result = await db.execute(
+        select(LlmProvider).where(
+            LlmProvider.enabled == True,
+            LlmProvider.is_default_for_digest == True,
+        )
     )
+    digest_provider = result.scalar_one_or_none()
+    if not digest_provider:
+        result = await db.execute(
+            select(LlmProvider).where(LlmProvider.enabled == True)
+        )
+        digest_provider = result.scalar_one_or_none()
+
+    digest_date = data.digest_date or datetime.now()
+    content_md = digest_service.generate_digest_content(events, digest_provider, digest_date=digest_date)
+
+    digest = DailyDigest(
+        id=str(uuid.uuid4()),
+        digest_date=digest_date.replace(hour=0, minute=0, second=0, microsecond=0) if not is_custom else digest_date,
+        content_markdown=content_md,
+        item_count=len(events),
+        status="published",
+        generated_at=datetime.now(timezone.utc),
+    )
+    if digest_provider:
+        digest.llm_provider_id = digest_provider.id
+        digest.llm_model = digest_provider.default_model
+    db.add(digest)
+    await db.commit()
+    await db.refresh(digest)
     return digest
+
+
+@router.post("/digests/preview")
+async def preview_digest_events(data: DigestGenerateRequest, db: AsyncSession = Depends(get_db)):
+    if data.date_start or data.article_ids:
+        events = await event_service.get_events_by_custom_criteria(
+            db,
+            date_start=data.date_start,
+            date_end=data.date_end,
+            article_ids=data.article_ids,
+        )
+    else:
+        beijing_tz = timezone(timedelta(hours=8))
+        now_beijing = datetime.now(beijing_tz)
+        events = await event_service.get_digest_candidate_events(
+            db,
+            now=now_beijing,
+        )
+
+    total_articles = sum(event.get("article_count", 0) for event in events)
+    return {
+        "event_count": len(events),
+        "article_count": total_articles,
+        "events": [
+            {
+                "id": event["id"],
+                "title": event["title"],
+                "event_type": event.get("event_type"),
+                "importance": event.get("importance"),
+                "article_count": event.get("article_count", 0),
+                "event_date_start": event.get("event_date_start"),
+                "event_date_end": event.get("event_date_end"),
+            }
+            for event in events
+        ],
+    }
 
 
 @router.post("/digests/{digest_id}/send-test")

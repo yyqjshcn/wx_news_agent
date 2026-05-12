@@ -27,6 +27,8 @@ from app.models.rss_feed import RssFeed
 from app.core.security import decrypt_api_key
 from app.services.rss_service import parse_feed
 from app.services import event_service
+from app.services import digest_service
+from app.services.article_service import log_system
 from app.services.workflow_alert_service import send_workflow_failure_alert
 
 logger = logging.getLogger(__name__)
@@ -130,6 +132,7 @@ async def _send_alert_if_needed(run_id: str, error_message: str):
 async def _execute_workflow(run_id: str, label: str, payload_factory):
     workflow_id = await _mark_run_started(run_id)
     logger.info("Starting %s workflow run %s", label, run_id)
+    await log_system("INFO", "workflow", f"工作流开始: {label}", {"run_id": run_id})
     try:
         result = await payload_factory(workflow_id)
         summary_status = (result or {}).get("status")
@@ -149,6 +152,7 @@ async def _execute_workflow(run_id: str, label: str, payload_factory):
             error_message=str(e),
         )
         await _send_alert_if_needed(run_id, str(e))
+        await log_system("ERROR", "workflow", f"工作流失败: {label}", {"run_id": run_id, "error": str(e)})
         raise
 
 
@@ -288,6 +292,7 @@ async def do_daily_ingest(workflow_id: str) -> dict:
 
         for account in accounts:
             try:
+                await log_system("INFO", "daily_ingest", f"开始抓取公众号: {account.account_name}", {"fakeid": account.fakeid})
                 articles = await _fetch_articles_from_adapter(account.fakeid, count=20)
                 total_fetched += len(articles)
 
@@ -317,6 +322,7 @@ async def do_daily_ingest(workflow_id: str) -> dict:
                     )
                     existing = existing_result.scalar_one_or_none()
                     if existing:
+                        await log_system("DEBUG", "daily_ingest", f"跳过重复文章: {title[:80]}")
                         continue
 
                     # Fetch full article content
@@ -329,6 +335,7 @@ async def do_daily_ingest(workflow_id: str) -> dict:
                             plain_content = content_result["plain_content"]
                         elif error:
                             logger.warning(f"Using fallback content for article: {title[:50]}... (error: {error})")
+                            await log_system("WARNING", "daily_ingest", f"文章内容抓取失败: {title[:50]}", {"error": error})
                         if content_result.get("html_content"):
                             html_content = content_result["html_content"]
 
@@ -349,6 +356,7 @@ async def do_daily_ingest(workflow_id: str) -> dict:
                     )
                     session.add(new_article)
                     total_stored += 1
+                    await log_system("INFO", "daily_ingest", f"新文章入库: {title[:80]}", {"article_id": new_article.id, "account_name": account.account_name})
 
                     # Add delay between article fetches to avoid WeChat rate limiting
                     await asyncio.sleep(8)
@@ -360,6 +368,7 @@ async def do_daily_ingest(workflow_id: str) -> dict:
             except Exception as e:
                 logger.error(f"Failed to fetch articles for {account.account_name}: {e}")
                 errors.append(f"{account.account_name}: {e}")
+                await log_system("ERROR", "daily_ingest", f"抓取公众号失败: {account.account_name}", {"error": str(e)})
                 account.last_checked_at = datetime.now(timezone.utc)
                 await session.commit()
 
@@ -372,7 +381,7 @@ async def do_daily_ingest(workflow_id: str) -> dict:
         else:
             status = "completed"
 
-        return {
+        summary = {
             "workflow_id": workflow_id,
             "status": status,
             "articles_fetched": total_fetched,
@@ -382,6 +391,8 @@ async def do_daily_ingest(workflow_id: str) -> dict:
             "errors": errors[:5],
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
+        await log_system("INFO", "daily_ingest", f"每日采集完成: {total_stored}篇入库 / {total_fetched}篇拉取 / {total_matched}篇匹配关键词", summary)
+        return summary
     finally:
         await session.close()
 
@@ -419,6 +430,7 @@ async def do_classify_articles(workflow_id: str) -> dict:
     
     if not provider:
         logger.warning("No enabled LLM provider found for classification")
+        await log_system("WARNING", "classify", "分类跳过: 无可用 LLM 供应商")
         return {
             "workflow_id": workflow_id,
             "classified_count": 0,
@@ -427,6 +439,7 @@ async def do_classify_articles(workflow_id: str) -> dict:
         }
     
     logger.info(f"Starting article classification with provider: {provider.name}, model: {provider.default_model}")
+    await log_system("INFO", "classify", f"开始分类文章: {provider.name}/{provider.default_model}")
 
     while iteration < MAX_ITERATIONS:
         iteration += 1
@@ -436,6 +449,7 @@ async def do_classify_articles(workflow_id: str) -> dict:
         if elapsed.total_seconds() > MAX_WORKFLOW_MINUTES * 60:
             total_errors.append(f"Workflow timed out after {MAX_WORKFLOW_MINUTES} minutes")
             logger.warning(f"Workflow timeout reached after {elapsed.total_seconds()}s")
+            await log_system("WARNING", "classify", f"分类超时 ({MAX_WORKFLOW_MINUTES}分钟)")
             break
         
         # Fetch batch of new articles (fresh session each time)
@@ -453,6 +467,7 @@ async def do_classify_articles(workflow_id: str) -> dict:
             break
         
         logger.info(f"Processing batch {iteration}: {len(articles)} articles")
+        await log_system("INFO", "classify", f"正在分类第{iteration}批 ({len(articles)}篇)")
 
         # Process articles concurrently with limited concurrency
         batch_classified = 0
@@ -506,7 +521,7 @@ async def do_classify_articles(workflow_id: str) -> dict:
     elapsed_total = datetime.now(timezone.utc) - start_time
     logger.info(f"Classification complete: {total_classified} articles, {len(total_errors)} errors, status={status}, duration={elapsed_total.total_seconds():.1f}s")
 
-    return {
+    result = {
         "workflow_id": workflow_id,
         "status": status,
         "classified_count": total_classified,
@@ -515,6 +530,8 @@ async def do_classify_articles(workflow_id: str) -> dict:
         "duration_seconds": elapsed_total.total_seconds(),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+    await log_system("INFO", "classify", f"分类完成: {total_classified}篇 / {len(total_errors)}错误 / {elapsed_total.total_seconds():.1f}s", result)
+    return result
 
 
 async def _classify_single_article(article: RawArticle, provider: LlmProvider) -> tuple[bool, str | None]:
@@ -566,15 +583,18 @@ async def _classify_single_article(article: RawArticle, provider: LlmProvider) -
 
             await session.commit()
             logger.debug(f"Successfully classified article: {article_title}")
+            await log_system("INFO", "classify", f"分类完成: {article_title}", {"event_type": classification.get("event_type"), "is_relevant": classification.get("is_relevant")})
             return True, None
             
     except asyncio.TimeoutError:
         error_msg = f"LLM request timed out (120s) for: {article_title}"
         logger.warning(error_msg)
+        await log_system("ERROR", "classify", f"分类失败 (超时): {article_title}")
         return False, error_msg
     except Exception as e:
         error_msg = f"{article_title}: {e}"
         logger.exception(f"Error classifying article {article_id[:8]}")
+        await log_system("ERROR", "classify", f"分类失败: {article_title}", {"error": str(e)})
         return False, error_msg
 
 
@@ -761,9 +781,11 @@ async def do_rss_ingest(workflow_id: str) -> dict:
 
         for feed in feeds:
             try:
+                await log_system("INFO", "rss_ingest", f"开始抓取RSS源: {feed.name}", {"url": feed.feed_url})
                 feed_result = parse_feed(feed.feed_url)
                 if not feed_result["success"]:
                     errors.append(f"{feed.name}: {feed_result.get('error')}")
+                    await log_system("ERROR", "rss_ingest", f"抓取RSS源失败: {feed.name}", {"error": feed_result.get('error')})
                     feed.last_checked_at = datetime.now(timezone.utc)
                     await session.commit()
                     continue
@@ -792,6 +814,7 @@ async def do_rss_ingest(workflow_id: str) -> dict:
                     )
                     existing = existing_result.scalar_one_or_none()
                     if existing:
+                        await log_system("DEBUG", "rss_ingest", f"跳过重复RSS文章: {(entry.get('title', '') or '')[:80]}")
                         continue
 
                     # Fetch full article content
@@ -805,6 +828,7 @@ async def do_rss_ingest(workflow_id: str) -> dict:
                             plain_content = content_result["plain_content"]
                         elif error:
                             logger.warning(f"Using fallback content for RSS article: {entry.get('title', '')[:50]}... (error: {error})")
+                            await log_system("WARNING", "rss_ingest", f"RSS文章内容抓取失败: {(entry.get('title', '') or '')[:50]}", {"error": error})
                         if content_result.get("html_content"):
                             html_content = content_result["html_content"]
 
@@ -825,6 +849,7 @@ async def do_rss_ingest(workflow_id: str) -> dict:
                     )
                     session.add(new_article)
                     total_stored += 1
+                    await log_system("INFO", "rss_ingest", f"新RSS文章入库: {(entry.get('title', '') or '')[:80]}", {"article_id": new_article.id, "source": feed.name})
 
                 feed.last_checked_at = datetime.now(timezone.utc)
                 feed.last_success_at = datetime.now(timezone.utc)
@@ -833,6 +858,7 @@ async def do_rss_ingest(workflow_id: str) -> dict:
             except Exception as e:
                 logger.error(f"Failed to fetch RSS feed {feed.name}: {e}")
                 errors.append(f"{feed.name}: {e}")
+                await log_system("ERROR", "rss_ingest", f"抓取RSS源失败: {feed.name}", {"error": str(e)})
                 feed.last_checked_at = datetime.now(timezone.utc)
                 await session.commit()
 
@@ -845,7 +871,7 @@ async def do_rss_ingest(workflow_id: str) -> dict:
         else:
             status = "completed"
 
-        return {
+        summary = {
             "workflow_id": workflow_id,
             "status": status,
             "articles_fetched": total_fetched,
@@ -855,6 +881,8 @@ async def do_rss_ingest(workflow_id: str) -> dict:
             "errors": errors[:5],
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
+        await log_system("INFO", "rss_ingest", f"RSS采集完成: {total_stored}篇入库 / {total_fetched}篇拉取 / {total_matched}篇匹配关键词", summary)
+        return summary
     finally:
         await session.close()
 
@@ -866,450 +894,6 @@ async def do_login_health_check(workflow_id: str) -> dict:
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
-
-def _fix_markdown_headings(text: str) -> str:
-    lines = text.split("\n")
-    fixed = []
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        if stripped.startswith("##"):
-            if i > 0 and fixed and fixed[-1].strip() != "":
-                fixed.append("")
-            fixed.append(stripped)
-            if i < len(lines) - 1 and lines[i + 1].strip() != "":
-                fixed.append("")
-        else:
-            fixed.append(line)
-    return "\n".join(fixed)
-
-
-def _sanitize_digest_content(text: str) -> str:
-    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1", text)
-    text = re.sub(r"https?://[^\s)>]+", "", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
-
-
-_DIGEST_THEME_TAG_RE = re.compile(r"<!--\s*events:\s*([a-zA-Z0-9,\-\s]+)\s*-->")
-
-
-def _digest_category_name(event: dict) -> str:
-    return event.get("event_type") or "其他"
-
-
-def _group_digest_events_by_category(events: list[dict]) -> list[dict]:
-    grouped: dict[str, dict] = {}
-    for event_index, event in enumerate(events):
-        category = _digest_category_name(event)
-        entry = grouped.setdefault(
-            category,
-            {
-                "name": category,
-                "events": [],
-            },
-        )
-        entry["events"].append({**event, "_digest_event_index": event_index})
-    return list(grouped.values())
-
-
-def _digest_publish_time_sort_value(value) -> float:
-    dt = _ensure_tz(value)
-    if dt is None:
-        return 0.0
-    return dt.timestamp()
-
-
-def _render_digest_category_links(category: dict) -> list[str]:
-    candidates: list[dict] = []
-    for event in category["events"]:
-        for article in (event.get("representative_articles") or [])[:3]:
-            title = article.get("title")
-            url = article.get("article_url")
-            if not title or not url:
-                continue
-            candidates.append(
-                {
-                    "title": title,
-                    "url": url,
-                    "source": article.get("account_name") or "未知来源",
-                    "importance": event.get("importance") or 0,
-                    "publish_sort": _digest_publish_time_sort_value(article.get("publish_time")),
-                    "event_index": event.get("_digest_event_index", 0),
-                }
-            )
-
-    candidates.sort(
-        key=lambda item: (
-            -(item["importance"] or 0),
-            -item["publish_sort"],
-            item["event_index"],
-        )
-    )
-
-    rendered: list[str] = []
-    seen_urls: set[str] = set()
-    for item in candidates:
-        if item["url"] in seen_urls:
-            continue
-        seen_urls.add(item["url"])
-        rendered.append(f"- [{item['title']}]({item['url']}) — {item['source']}")
-    return rendered
-
-
-def _fallback_category_summary(category: dict) -> str:
-    item_count = len(category["events"])
-    if item_count <= 0:
-        return "本分类暂无可展示内容。"
-    if item_count == 1:
-        return "本分类聚焦 1 个重点事件，下列链接可用于查看完整上下文。"
-    return f"本分类共整理 {item_count} 个相关事件，下面汇总代表文章链接供进一步查看。"
-
-
-_SECTION_CATEGORIES = (
-    ("embodied_data", ("数据集", "训练数据", "数据采集", "数据云", "数据标注", "数据基础设施")),
-    ("world_model", ("世界模型", "world model", "空间理解")),
-    ("embodied_other", ("人形机器人", "具身机器人", "具身智能", "embodied", "具身AI", "机器人")),
-)
-
-
-def _classify_digest_section(section: dict, theme_pool: dict) -> str:
-    text = (section.get("title") or "").lower()
-
-    for category, keywords in _SECTION_CATEGORIES:
-        for keyword in keywords:
-            if keyword.lower() in text:
-                return category
-
-    body_text = (section.get("body") or "").lower()
-    data_kw = (
-        "数据集", "训练数据", "数据采集", "数据基础设施", "数据编译", "数据范式",
-        "数据质量", "训练范式", "仿真数据", "embodied dataset", "data collection",
-    )
-    for keyword in data_kw:
-        if keyword.lower() in body_text:
-            return "embodied_data"
-
-    wm_kw = ("世界模型", "world model", "空间理解")
-    for keyword in wm_kw:
-        if keyword.lower() in body_text:
-            return "world_model"
-
-    return "other"
-
-
-_SECTION_CATEGORY_ORDER = {
-    "embodied_data": 0,
-    "world_model": 1,
-    "embodied_other": 2,
-    "other": 3,
-}
-
-
-def _sort_digest_sections(sections: list[dict], theme_pool: dict) -> list[dict]:
-    def section_key(section):
-        category = _classify_digest_section(section, theme_pool)
-        return _SECTION_CATEGORY_ORDER.get(category, 3)
-
-    return sorted(sections, key=section_key)
-
-
-def _build_digest_theme_pool(events: list[dict]) -> dict[str, dict]:
-    theme_pool: dict[str, dict] = {}
-    for event_index, event in enumerate(events):
-        event_id = event.get("id")
-        if not event_id:
-            continue
-        theme_pool[event_id] = {
-            **event,
-            "_digest_event_index": event_index,
-        }
-    return theme_pool
-
-
-def _render_digest_theme_links(theme_events: list[dict]) -> list[str]:
-    candidates: list[dict] = []
-    for event in theme_events:
-        for article in (event.get("representative_articles") or [])[:3]:
-            title = article.get("title")
-            url = article.get("article_url")
-            if not title or not url:
-                continue
-            candidates.append(
-                {
-                    "title": title,
-                    "url": url,
-                    "source": article.get("account_name") or "未知来源",
-                    "importance": event.get("importance") or 0,
-                    "publish_sort": _digest_publish_time_sort_value(article.get("publish_time")),
-                    "event_index": event.get("_digest_event_index", 0),
-                }
-            )
-
-    candidates.sort(
-        key=lambda item: (
-            -(item["importance"] or 0),
-            -item["publish_sort"],
-            item["event_index"],
-        )
-    )
-
-    rendered: list[str] = []
-    seen_urls: set[str] = set()
-    for item in candidates:
-        if item["url"] in seen_urls:
-            continue
-        seen_urls.add(item["url"])
-        rendered.append(f"- [{item['title']}]({item['url']}) — {item['source']}")
-    return rendered
-
-
-def _fallback_theme_summary(theme_events: list[dict]) -> str:
-    item_count = len(theme_events)
-    if item_count <= 0:
-        return "暂无可展示内容。"
-    if item_count == 1:
-        return "这里补充 1 个未被主题归纳的重点事件，附上相关文章供进一步查看。"
-    return f"这里补充 {item_count} 个未被主题归纳的重点事件，附上相关文章供进一步查看。"
-
-
-def _parse_digest_theme_sections(content: str) -> tuple[list[str], list[dict]]:
-    lines = content.splitlines()
-    intro_lines: list[str] = []
-    sections: list[dict] = []
-    current_section: dict | None = None
-
-    def flush_current():
-        nonlocal current_section
-        if current_section is None:
-            return
-        body = "\n".join(current_section["lines"]).strip()
-        raw_event_ids = current_section.pop("raw_event_ids", [])
-        event_ids: list[str] = []
-        seen_ids: set[str] = set()
-        for event_id in raw_event_ids:
-            if event_id and event_id not in seen_ids:
-                seen_ids.add(event_id)
-                event_ids.append(event_id)
-        sections.append(
-            {
-                "title": current_section["title"],
-                "body": body,
-                "event_ids": event_ids,
-            }
-        )
-        current_section = None
-
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("## "):
-            flush_current()
-            current_section = {
-                "title": stripped[3:].strip(),
-                "lines": [],
-                "raw_event_ids": [],
-            }
-            continue
-
-        matches = _DIGEST_THEME_TAG_RE.findall(line)
-        if matches:
-            if current_section is not None:
-                for match in matches:
-                    current_section["raw_event_ids"].extend([part.strip() for part in match.split(",") if part.strip()])
-            continue
-
-        if current_section is None:
-            intro_lines.append(line)
-        else:
-            current_section["lines"].append(line)
-
-    flush_current()
-    intro = "\n".join(intro_lines).strip()
-    return ([intro] if intro else []), sections
-
-
-def _inject_digest_theme_links(content: str, events: list[dict]) -> str:
-    intro_parts, sections = _parse_digest_theme_sections(content)
-    theme_pool = _build_digest_theme_pool(events)
-    sections = _sort_digest_sections(sections, theme_pool)
-    assigned_event_ids: set[str] = set()
-    output: list[str] = [part for part in intro_parts if part]
-
-    for section in sections:
-        theme_events: list[dict] = []
-        for event_id in section["event_ids"]:
-            event = theme_pool.get(event_id)
-            if not event:
-                continue
-            theme_events.append(event)
-            assigned_event_ids.add(event_id)
-
-        if output and output[-1].strip():
-            output.append("")
-        output.append(f"## {section['title']}")
-        output.append("")
-        if section["body"]:
-            output.append(section["body"])
-        links = _render_digest_theme_links(theme_events)
-        if links:
-            output.append("")
-            output.extend(links)
-        output.append("")
-
-    other_section = next((s for s in sections if s["title"] == "其他重点动态"), None)
-
-    missing_events = [event for event_id, event in theme_pool.items() if event_id not in assigned_event_ids]
-    if missing_events and not other_section:
-        if output and output[-1].strip():
-            output.append("")
-        output.append("## 其他重点动态")
-        output.append("")
-        output.append(_fallback_theme_summary(missing_events))
-        links = _render_digest_theme_links(missing_events)
-        if links:
-            output.append("")
-            output.extend(links)
-        output.append("")
-
-    return "\n".join(output).strip()
-
-
-def _call_llm_sync(provider, system_prompt: str, user_prompt: str, timeout: int | None = None) -> dict:
-    import time
-    api_key = decrypt_api_key(provider.api_key_encrypted)
-    url = provider.base_url.rstrip("/") + "/chat/completions"
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    if provider.extra_headers_json:
-        headers.update(provider.extra_headers_json)
-
-    payload = {
-        "model": provider.default_model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "max_tokens": 4000,
-    }
-
-    effective_timeout = timeout or (provider.request_timeout * 3)
-
-    for attempt in range(provider.max_retries):
-        try:
-            resp = httpx.post(url, json=payload, headers=headers, timeout=effective_timeout)
-            resp.raise_for_status()
-            data = resp.json()
-            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-            return {"success": True, "content": content, "usage": data.get("usage", {})}
-        except Exception as e:
-            if attempt == provider.max_retries - 1:
-                return {"success": False, "error": str(e)}
-            time.sleep(2 ** attempt)
-
-    return {"success": False, "error": "Max retries exceeded"}
-
-
-def _generate_digest_content(events, provider) -> str:
-    from app.core.prompt_loader import load_prompt
-
-    if not events:
-        return "# 每日摘要\n\n今日暂无事件。"
-
-    beijing_tz = timezone(timedelta(hours=8))
-    header = f"# 每日摘要\n\n**日期**: {datetime.now(beijing_tz).strftime('%Y-%m-%d')}\n\n"
-    header += f"**共 {len(events)} 个事件**\n\n---\n\n"
-
-    if provider:
-        try:
-            selected_articles = event_service.select_digest_articles(events, max_articles=30)
-            event_summaries = []
-            event_theme_pool = _build_digest_theme_pool(events)
-            for index, event in enumerate(events, 1):
-                participants = "、".join(entity["name"] for entity in event.get("entities", [])[:4]) or "未识别主体"
-                event_summary = (event.get("summary_long") or event.get("summary_short") or "暂无摘要").strip()
-                latest_article_time = event.get("selection_latest_article_time") or event.get("latest_article_time")
-                representative_titles = "；".join(
-                    article["title"]
-                    for article in event.get("representative_articles", [])[:3]
-                    if article.get("title")
-                ) or "无"
-                event_summaries.append(
-                    f"{index}. 事件ID: {event['id']}\n"
-                    f"   - 标题: {event['title']}\n"
-                    f"   - 当前事件分类: {_digest_category_name(event)}\n"
-                    f"   - 参与方: {participants}\n"
-                    f"   - 事件摘要: {event_summary[:320]}\n"
-                    f"   - 最新相关文章时间: {latest_article_time.isoformat() if latest_article_time else '未知'}\n"
-                    f"   - 关联文章数: {event.get('article_count', 0)}\n"
-                    f"   - 代表文章标题: {representative_titles}"
-                )
-
-            article_summaries = []
-            for i, article in enumerate(selected_articles, 1):
-                event_id = article.get("event_id")
-                event = event_theme_pool.get(event_id, {})
-                article_summaries.append(
-                    f"{i}. [事件ID: {event_id}] {article['title']}\n"
-                    f"   - 当前事件分类: {_digest_category_name(event)}\n"
-                    f"   - 所属事件: {article['event_title']}\n"
-                    f"   - 来源: {article['account_name']}\n"
-                    f"   - 发布时间: {article['publish_time'].isoformat() if article.get('publish_time') else '未知'}\n"
-                    f"   - 内容摘要: {article['content_text']}"
-                )
-
-            prompt_cfg = load_prompt("digest")
-            events_text = "\n\n".join(event_summaries)
-            articles_text = "\n\n".join(article_summaries) if article_summaries else "无额外文章材料。"
-            user_prompt = prompt_cfg["user_prompt_template"].format(
-                event_count=len(events),
-                article_count=len(selected_articles),
-                focus_area=prompt_cfg.get("focus_area", "科技领域"),
-                events=events_text,
-                articles=articles_text,
-            )
-            system_prompt = prompt_cfg.get("system_prompt", "")
-            timeout = prompt_cfg.get("timeout", 120)
-
-            result = _call_llm_sync(
-                provider=provider,
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                timeout=timeout,
-            )
-
-            if result.get("success"):
-                raw = result["content"]
-                content = _sanitize_digest_content(raw)
-                content = _fix_markdown_headings(content)
-                content = _inject_digest_theme_links(content, events)
-                content = header + content
-                footer = f"\n\n---\n\n*摘要由 AI 自动生成，使用模型: {provider.default_model}*"
-                return content + footer
-            else:
-                logger.warning(f"LLM call failed: {result.get('error')}")
-        except Exception as e:
-            logger.warning(f"LLM digest generation failed, falling back to simple format: {e}")
-
-    content = header
-    by_type = {}
-    for event in events:
-        by_type.setdefault(event.get("event_type") or "其他", []).append(event)
-
-    content += "## 📊 今日概览\n\n"
-    content += f"共识别 **{len(events)}** 个聚合事件。\n\n"
-
-    for event_type, items in by_type.items():
-        content += f"## {event_type}\n\n"
-        category = {"name": event_type, "events": [{**event, "_digest_event_index": index} for index, event in enumerate(items)]}
-        content += _fallback_category_summary(category) + "\n\n"
-        links = _render_digest_category_links(category)
-        if links:
-            content += "\n".join(links) + "\n"
-        content += "\n"
-
-    return content
 
 
 async def do_generate_digest(workflow_id: str) -> dict:
@@ -1326,6 +910,8 @@ async def do_generate_digest(workflow_id: str) -> dict:
             fallback_limit=30,
         )
 
+        await log_system("INFO", "digest", f"开始生成摘要: {len(events)}个事件")
+
         result = await session.execute(
             select(LlmProvider).where(
                 LlmProvider.enabled == True,
@@ -1340,7 +926,7 @@ async def do_generate_digest(workflow_id: str) -> dict:
             )
             digest_provider = result.scalar_one_or_none()
 
-        content_md = _generate_digest_content(events, digest_provider)
+        content_md = digest_service.generate_digest_content(events, digest_provider)
 
         digest = DailyDigest(
             id=str(uuid.uuid4()),
@@ -1357,7 +943,7 @@ async def do_generate_digest(workflow_id: str) -> dict:
 
         await session.commit()
 
-        return {
+        result = {
             "workflow_id": workflow_id,
             "status": "completed",
             "digest_date": digest_date.strftime("%Y-%m-%d"),
@@ -1367,6 +953,9 @@ async def do_generate_digest(workflow_id: str) -> dict:
             "llm_provider": digest_provider.name if digest_provider else None,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
+        provider_name = digest_provider.name if digest_provider else "无LLM"
+        await log_system("INFO", "digest", f"摘要生成完成: {digest_date.strftime('%Y-%m-%d')}, {len(events)}条, {provider_name}", result)
+        return result
     finally:
         await session.close()
 
@@ -1423,6 +1012,8 @@ async def run_sequential_pipeline(workflow_id: str) -> dict:
     total_count = len(PIPELINE_STEPS)
     error_msg = None
 
+    await log_system("INFO", "pipeline", f"Pipeline 开始: {total_count}个步骤", {"run_id": pipeline_run_id})
+
     await _update_run_progress(pipeline_run_id, {
         "is_pipeline": True,
         "current_step": "",
@@ -1438,6 +1029,7 @@ async def run_sequential_pipeline(workflow_id: str) -> dict:
         step_fn = step["fn"]
 
         logger.info(f"Pipeline {pipeline_run_id}: starting step {idx+1}/{total_count} - {step_key}")
+        await log_system("INFO", "pipeline", f"[{idx+1}/{total_count}] {step_label}")
 
         await _update_run_progress(pipeline_run_id, {
             "current_step": step_key,
@@ -1469,6 +1061,11 @@ async def run_sequential_pipeline(workflow_id: str) -> dict:
                 logger.warning(f"Pipeline {pipeline_run_id}: step {step_key} exception (attempt {attempt}): {e}")
                 if attempt < 2:
                     await asyncio.sleep(2)
+
+        if step_success:
+            await log_system("INFO", "pipeline", f"[{idx+1}/{total_count}] {step_label} 完成")
+        else:
+            await log_system("ERROR", "pipeline", f"[{idx+1}/{total_count}] {step_label} 失败")
 
         step_info = {
             "step": step_key,
@@ -1532,6 +1129,10 @@ async def run_sequential_pipeline(workflow_id: str) -> dict:
     finally:
         await s.close()
 
+    if all_success:
+        await log_system("INFO", "pipeline", f"Pipeline 完成: {completed_count}/{total_count}步骤成功", final_summary)
+    else:
+        await log_system("ERROR", "pipeline", f"Pipeline 失败: 步骤 {error_msg}", final_summary)
     return final_summary
 
 

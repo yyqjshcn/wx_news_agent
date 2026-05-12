@@ -7,6 +7,7 @@ import {
   FileText, RefreshCw, Settings, Eye, Code,
   Plus, Trash2, Edit2, Ban, Loader2,
   Send, ChevronDown, ChevronUp, Bell,
+  Search, Calendar, X, Check, SlidersHorizontal,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -29,6 +30,15 @@ export default function DigestsPage() {
   const [selectedChannels, setSelectedChannels] = useState<Set<string>>(new Set());
   const queryClient = useQueryClient();
 
+  const [showCustomModal, setShowCustomModal] = useState(false);
+  const [customTab, setCustomTab] = useState<"date" | "articles">("date");
+  const [dateStart, setDateStart] = useState("");
+  const [dateEnd, setDateEnd] = useState("");
+  const [selectedArticleIds, setSelectedArticleIds] = useState<Set<string>>(new Set());
+  const [articleSearch, setArticleSearch] = useState("");
+  const [articlePage, setArticlePage] = useState(0);
+  const [previewResult, setPreviewResult] = useState<any>(null);
+
   const { data: digests, isLoading } = useQuery({
     queryKey: ["digests"],
     queryFn: () => api.get("/api/digests"),
@@ -43,6 +53,16 @@ export default function DigestsPage() {
     queryKey: ["digest", selectedId],
     queryFn: () => api.get(`/api/digests/${selectedId}`),
     enabled: !!selectedId,
+  });
+
+  const { data: articleSearchResult } = useQuery({
+    queryKey: ["articles-search", articleSearch, articlePage],
+    queryFn: () =>
+      api.get(
+        `/api/articles?query=${encodeURIComponent(articleSearch)}&is_relevant=true&limit=30&skip=${articlePage * 30}`
+      ),
+    enabled: showCustomModal && customTab === "articles" && articleSearch.length >= 1,
+    placeholderData: (prev: any) => prev,
   });
 
   const generateMutation = useMutation({
@@ -73,6 +93,28 @@ export default function DigestsPage() {
     },
     onError: (error: Error) => {
       alert(`发送失败: ${error.message}`);
+    },
+  });
+
+  const customGenerateMutation = useMutation({
+    mutationFn: (payload: any) => api.post("/api/digests/generate", payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["digests"] });
+      setShowCustomModal(false);
+      setPreviewResult(null);
+    },
+    onError: (error: Error) => {
+      alert(`生成失败: ${error.message}`);
+    },
+  });
+
+  const previewMutation = useMutation({
+    mutationFn: (payload: any) => api.post("/api/digests/preview", payload),
+    onSuccess: (data: any) => {
+      setPreviewResult(data);
+    },
+    onError: (error: Error) => {
+      alert(`预览失败: ${error.message}`);
     },
   });
 
@@ -109,8 +151,67 @@ export default function DigestsPage() {
             />
             生成今日摘要
           </button>
+          <button
+            onClick={() => {
+              setShowCustomModal(true);
+              setPreviewResult(null);
+              setSelectedArticleIds(new Set());
+              setArticleSearch("");
+              setArticlePage(0);
+            }}
+            className="flex items-center gap-2 px-4 py-2 border border-gray-300 rounded-md text-sm hover:bg-gray-50"
+          >
+            <SlidersHorizontal size={16} />
+            自定义生成
+          </button>
         </div>
       </div>
+
+      <CustomDigestModal
+        open={showCustomModal}
+        onClose={() => setShowCustomModal(false)}
+        tab={customTab}
+        onTabChange={setCustomTab}
+        dateStart={dateStart}
+        onDateStartChange={setDateStart}
+        dateEnd={dateEnd}
+        onDateEndChange={setDateEnd}
+        selectedArticleIds={selectedArticleIds}
+        onToggleArticle={(id) => {
+          const next = new Set(selectedArticleIds);
+          if (next.has(id)) next.delete(id);
+          else next.add(id);
+          setSelectedArticleIds(next);
+        }}
+        articleSearch={articleSearch}
+        onArticleSearchChange={(v) => { setArticleSearch(v); setArticlePage(0); }}
+        articlePage={articlePage}
+        onArticlePageChange={setArticlePage}
+        articleSearchResult={articleSearchResult}
+        previewResult={previewResult}
+        onPreview={() => {
+          const payload: any = {};
+          if (customTab === "date") {
+            payload.date_start = dateStart ? new Date(dateStart).toISOString() : undefined;
+            payload.date_end = dateEnd ? new Date(dateEnd + "T23:59:59").toISOString() : undefined;
+          } else {
+            payload.article_ids = Array.from(selectedArticleIds);
+          }
+          previewMutation.mutate(payload);
+        }}
+        isPreviewing={previewMutation.isPending}
+        onGenerate={() => {
+          const payload: any = {};
+          if (customTab === "date") {
+            payload.date_start = dateStart ? new Date(dateStart).toISOString() : undefined;
+            payload.date_end = dateEnd ? new Date(dateEnd + "T23:59:59").toISOString() : undefined;
+          } else {
+            payload.article_ids = Array.from(selectedArticleIds);
+          }
+          customGenerateMutation.mutate(payload);
+        }}
+        isGenerating={customGenerateMutation.isPending}
+      />
 
       {showChannelManager && <ChannelManager channels={channels} />}
 
@@ -808,4 +909,247 @@ function ChannelConfigForm({
     default:
       return null;
   }
+}
+
+interface CustomDigestModalProps {
+  open: boolean;
+  onClose: () => void;
+  tab: "date" | "articles";
+  onTabChange: (tab: "date" | "articles") => void;
+  dateStart: string;
+  onDateStartChange: (v: string) => void;
+  dateEnd: string;
+  onDateEndChange: (v: string) => void;
+  selectedArticleIds: Set<string>;
+  onToggleArticle: (id: string) => void;
+  articleSearch: string;
+  onArticleSearchChange: (v: string) => void;
+  articlePage: number;
+  onArticlePageChange: (p: number) => void;
+  articleSearchResult: any;
+  previewResult: any;
+  onPreview: () => void;
+  isPreviewing: boolean;
+  onGenerate: () => void;
+  isGenerating: boolean;
+}
+
+function CustomDigestModal({
+  open, onClose, tab, onTabChange,
+  dateStart, onDateStartChange, dateEnd, onDateEndChange,
+  selectedArticleIds, onToggleArticle,
+  articleSearch, onArticleSearchChange,
+  articlePage, onArticlePageChange,
+  articleSearchResult, previewResult,
+  onPreview, isPreviewing, onGenerate, isGenerating,
+}: CustomDigestModalProps) {
+  if (!open) return null;
+
+  const canGenerate = tab === "date"
+    ? dateStart && dateEnd
+    : selectedArticleIds.size > 0;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
+      <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col">
+        <div className="flex items-center justify-between p-5 border-b">
+          <h2 className="text-lg font-semibold">自定义摘要生成</h2>
+          <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="flex border-b px-5">
+          {(["date", "articles"] as const).map((t) => (
+            <button
+              key={t}
+              onClick={() => onTabChange(t)}
+              className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+                tab === t
+                  ? "border-gray-900 text-gray-900"
+                  : "border-transparent text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              {t === "date" ? (
+                <span className="flex items-center gap-1.5"><Calendar size={14} />按日期范围</span>
+              ) : (
+                <span className="flex items-center gap-1.5"><Search size={14} />按文章选择</span>
+              )}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-5">
+          {tab === "date" && (
+            <div className="space-y-4">
+              <p className="text-sm text-gray-500">
+                选择日期范围，系统将包含该范围内的所有相关事件和文章。
+              </p>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">开始日期</label>
+                  <input
+                    type="date"
+                    value={dateStart}
+                    onChange={(e) => onDateStartChange(e.target.value)}
+                    className="w-full px-3 py-2 border rounded-md text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">结束日期</label>
+                  <input
+                    type="date"
+                    value={dateEnd}
+                    onChange={(e) => onDateEndChange(e.target.value)}
+                    min={dateStart || undefined}
+                    className="w-full px-3 py-2 border rounded-md text-sm"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {tab === "articles" && (
+            <div className="space-y-4">
+              <p className="text-sm text-gray-500">
+                搜索并选择文章，系统将包含选中文章对应的所有事件。
+              </p>
+              <div className="relative">
+                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input
+                  type="text"
+                  value={articleSearch}
+                  onChange={(e) => onArticleSearchChange(e.target.value)}
+                  placeholder="搜索文章标题..."
+                  className="w-full pl-9 pr-3 py-2 border rounded-md text-sm"
+                />
+              </div>
+
+              {selectedArticleIds.size > 0 && (
+                <div className="text-sm text-gray-600">
+                  已选择 <span className="font-semibold text-gray-900">{selectedArticleIds.size}</span> 篇文章
+                </div>
+              )}
+
+              <div className="border rounded-md divide-y max-h-60 overflow-y-auto">
+                {!articleSearch && (
+                  <div className="p-4 text-center text-gray-400 text-sm">
+                    请输入关键词搜索文章
+                  </div>
+                )}
+                {articleSearchResult?.length === 0 && articleSearch && (
+                  <div className="p-4 text-center text-gray-400 text-sm">
+                    未找到匹配的文章
+                  </div>
+                )}
+                {articleSearchResult?.map((article: any) => (
+                  <label
+                    key={article.id}
+                    className="flex items-start gap-3 px-4 py-3 hover:bg-gray-50 cursor-pointer"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedArticleIds.has(article.id)}
+                      onChange={() => onToggleArticle(article.id)}
+                      className="mt-0.5 w-4 h-4"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium truncate">{article.title}</div>
+                      <div className="flex items-center gap-2 mt-0.5 text-xs text-gray-400">
+                        <span>{article.account_name}</span>
+                        <span>{article.publish_time ? new Date(article.publish_time).toLocaleDateString() : "-"}</span>
+                        {article.linked_events?.length > 0 && (
+                          <span className="text-blue-500">
+                            {article.linked_events.map((e: any) => e.title).join(", ")}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+
+              {articleSearchResult?.length > 0 && (
+                <div className="flex justify-center gap-2">
+                  <button
+                    onClick={() => onArticlePageChange(Math.max(0, articlePage - 1))}
+                    disabled={articlePage === 0}
+                    className="px-3 py-1 border rounded text-sm disabled:opacity-30"
+                  >
+                    上一页
+                  </button>
+                  <span className="px-3 py-1 text-sm text-gray-500">第 {articlePage + 1} 页</span>
+                  <button
+                    onClick={() => onArticlePageChange(articlePage + 1)}
+                    disabled={articleSearchResult.length < 30}
+                    className="px-3 py-1 border rounded text-sm disabled:opacity-30"
+                  >
+                    下一页
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {previewResult && (
+            <div className="mt-6 p-4 bg-gray-50 rounded-lg border">
+              <h3 className="text-sm font-semibold mb-2">预览结果</h3>
+              <div className="flex gap-4 text-sm text-gray-600 mb-3">
+                <span>事件数: <strong className="text-gray-900">{previewResult.event_count}</strong></span>
+                <span>文章数: <strong className="text-gray-900">{previewResult.article_count}</strong></span>
+              </div>
+              {previewResult.events?.length > 0 && (
+                <div className="space-y-1 max-h-40 overflow-y-auto">
+                  {previewResult.events.map((event: any) => (
+                    <div key={event.id} className="text-xs text-gray-500 flex items-center gap-2">
+                      <span className={`px-1.5 py-0.5 rounded text-xs ${
+                        (event.importance || 0) >= 7 ? "bg-red-100 text-red-700" :
+                        (event.importance || 0) >= 5 ? "bg-yellow-100 text-yellow-700" :
+                        "bg-gray-100 text-gray-600"
+                      }`}>
+                        {event.event_type || "其他"}
+                      </span>
+                      <span className="truncate">{event.title}</span>
+                      <span className="text-gray-400">({event.article_count}篇)</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between p-5 border-t bg-gray-50 rounded-b-xl">
+          <div className="text-sm text-gray-500">
+            {canGenerate && !previewResult && "请先预览以确认事件范围"}
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={onClose}
+              className="px-4 py-2 border rounded-md text-sm hover:bg-gray-50"
+            >
+              取消
+            </button>
+            <button
+              onClick={onPreview}
+              disabled={!canGenerate || isPreviewing}
+              className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-700 disabled:opacity-50"
+            >
+              {isPreviewing ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}
+              预览
+            </button>
+            <button
+              onClick={onGenerate}
+              disabled={!canGenerate || isGenerating}
+              className="flex items-center gap-1.5 px-4 py-2 bg-gray-900 text-white rounded-md text-sm hover:bg-gray-800 disabled:opacity-50"
+            >
+              {isGenerating ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+              生成摘要
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
