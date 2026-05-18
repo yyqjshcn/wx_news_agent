@@ -28,7 +28,7 @@ from app.core.security import decrypt_api_key
 from app.services.rss_service import parse_feed
 from app.services import event_service
 from app.services import digest_service
-from app.services.article_service import log_system
+from app.services.article_service import create_log, log_system
 from app.services.workflow_alert_service import send_workflow_failure_alert
 
 logger = logging.getLogger(__name__)
@@ -292,7 +292,7 @@ async def do_daily_ingest(workflow_id: str) -> dict:
 
         for account in accounts:
             try:
-                await log_system("INFO", "daily_ingest", f"开始抓取公众号: {account.account_name}", {"fakeid": account.fakeid})
+                await create_log(session, "INFO", "daily_ingest", f"开始抓取公众号: {account.account_name}", {"fakeid": account.fakeid})
                 articles = await _fetch_articles_from_adapter(account.fakeid, count=20)
                 total_fetched += len(articles)
 
@@ -322,7 +322,7 @@ async def do_daily_ingest(workflow_id: str) -> dict:
                     )
                     existing = existing_result.scalar_one_or_none()
                     if existing:
-                        await log_system("DEBUG", "daily_ingest", f"跳过重复文章: {title[:80]}")
+                        await create_log(session, "DEBUG", "daily_ingest", f"跳过重复文章: {title[:80]}")
                         continue
 
                     # Fetch full article content
@@ -335,7 +335,7 @@ async def do_daily_ingest(workflow_id: str) -> dict:
                             plain_content = content_result["plain_content"]
                         elif error:
                             logger.warning(f"Using fallback content for article: {title[:50]}... (error: {error})")
-                            await log_system("WARNING", "daily_ingest", f"文章内容抓取失败: {title[:50]}", {"error": error})
+                            await create_log(session, "WARNING", "daily_ingest", f"文章内容抓取失败: {title[:50]}", {"error": error})
                         if content_result.get("html_content"):
                             html_content = content_result["html_content"]
 
@@ -356,7 +356,7 @@ async def do_daily_ingest(workflow_id: str) -> dict:
                     )
                     session.add(new_article)
                     total_stored += 1
-                    await log_system("INFO", "daily_ingest", f"新文章入库: {title[:80]}", {"article_id": new_article.id, "account_name": account.account_name})
+                    await create_log(session, "INFO", "daily_ingest", f"新文章入库: {title[:80]}", {"article_id": new_article.id, "account_name": account.account_name})
 
                     # Add delay between article fetches to avoid WeChat rate limiting
                     await asyncio.sleep(8)
@@ -368,7 +368,7 @@ async def do_daily_ingest(workflow_id: str) -> dict:
             except Exception as e:
                 logger.error(f"Failed to fetch articles for {account.account_name}: {e}")
                 errors.append(f"{account.account_name}: {e}")
-                await log_system("ERROR", "daily_ingest", f"抓取公众号失败: {account.account_name}", {"error": str(e)})
+                await create_log(session, "ERROR", "daily_ingest", f"抓取公众号失败: {account.account_name}", {"error": str(e)})
                 account.last_checked_at = datetime.now(timezone.utc)
                 await session.commit()
 
@@ -391,7 +391,7 @@ async def do_daily_ingest(workflow_id: str) -> dict:
             "errors": errors[:5],
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
-        await log_system("INFO", "daily_ingest", f"每日采集完成: {total_stored}篇入库 / {total_fetched}篇拉取 / {total_matched}篇匹配关键词", summary)
+        await create_log(session, "INFO", "daily_ingest", f"每日采集完成: {total_stored}篇入库 / {total_fetched}篇拉取 / {total_matched}篇匹配关键词", summary)
         return summary
     finally:
         await session.close()
@@ -781,11 +781,11 @@ async def do_rss_ingest(workflow_id: str) -> dict:
 
         for feed in feeds:
             try:
-                await log_system("INFO", "rss_ingest", f"开始抓取RSS源: {feed.name}", {"url": feed.feed_url})
+                await create_log(session, "INFO", "rss_ingest", f"开始抓取RSS源: {feed.name}", {"url": feed.feed_url})
                 feed_result = parse_feed(feed.feed_url)
                 if not feed_result["success"]:
                     errors.append(f"{feed.name}: {feed_result.get('error')}")
-                    await log_system("ERROR", "rss_ingest", f"抓取RSS源失败: {feed.name}", {"error": feed_result.get('error')})
+                    await create_log(session, "ERROR", "rss_ingest", f"抓取RSS源失败: {feed.name}", {"error": feed_result.get('error')})
                     feed.last_checked_at = datetime.now(timezone.utc)
                     await session.commit()
                     continue
@@ -814,7 +814,7 @@ async def do_rss_ingest(workflow_id: str) -> dict:
                     )
                     existing = existing_result.scalar_one_or_none()
                     if existing:
-                        await log_system("DEBUG", "rss_ingest", f"跳过重复RSS文章: {(entry.get('title', '') or '')[:80]}")
+                        await create_log(session, "DEBUG", "rss_ingest", f"跳过重复RSS文章: {(entry.get('title', '') or '')[:80]}")
                         continue
 
                     # Fetch full article content
@@ -828,7 +828,7 @@ async def do_rss_ingest(workflow_id: str) -> dict:
                             plain_content = content_result["plain_content"]
                         elif error:
                             logger.warning(f"Using fallback content for RSS article: {entry.get('title', '')[:50]}... (error: {error})")
-                            await log_system("WARNING", "rss_ingest", f"RSS文章内容抓取失败: {(entry.get('title', '') or '')[:50]}", {"error": error})
+                            await create_log(session, "WARNING", "rss_ingest", f"RSS文章内容抓取失败: {(entry.get('title', '') or '')[:50]}", {"error": error})
                         if content_result.get("html_content"):
                             html_content = content_result["html_content"]
 
@@ -849,7 +849,7 @@ async def do_rss_ingest(workflow_id: str) -> dict:
                     )
                     session.add(new_article)
                     total_stored += 1
-                    await log_system("INFO", "rss_ingest", f"新RSS文章入库: {(entry.get('title', '') or '')[:80]}", {"article_id": new_article.id, "source": feed.name})
+                    await create_log(session, "INFO", "rss_ingest", f"新RSS文章入库: {(entry.get('title', '') or '')[:80]}", {"article_id": new_article.id, "source": feed.name})
 
                 feed.last_checked_at = datetime.now(timezone.utc)
                 feed.last_success_at = datetime.now(timezone.utc)
@@ -858,7 +858,7 @@ async def do_rss_ingest(workflow_id: str) -> dict:
             except Exception as e:
                 logger.error(f"Failed to fetch RSS feed {feed.name}: {e}")
                 errors.append(f"{feed.name}: {e}")
-                await log_system("ERROR", "rss_ingest", f"抓取RSS源失败: {feed.name}", {"error": str(e)})
+                await create_log(session, "ERROR", "rss_ingest", f"抓取RSS源失败: {feed.name}", {"error": str(e)})
                 feed.last_checked_at = datetime.now(timezone.utc)
                 await session.commit()
 
@@ -881,7 +881,7 @@ async def do_rss_ingest(workflow_id: str) -> dict:
             "errors": errors[:5],
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
-        await log_system("INFO", "rss_ingest", f"RSS采集完成: {total_stored}篇入库 / {total_fetched}篇拉取 / {total_matched}篇匹配关键词", summary)
+        await create_log(session, "INFO", "rss_ingest", f"RSS采集完成: {total_stored}篇入库 / {total_fetched}篇拉取 / {total_matched}篇匹配关键词", summary)
         return summary
     finally:
         await session.close()
@@ -910,7 +910,7 @@ async def do_generate_digest(workflow_id: str) -> dict:
             fallback_limit=30,
         )
 
-        await log_system("INFO", "digest", f"开始生成摘要: {len(events)}个事件")
+        await create_log(session, "INFO", "digest", f"开始生成摘要: {len(events)}个事件")
 
         result = await session.execute(
             select(LlmProvider).where(
@@ -954,7 +954,7 @@ async def do_generate_digest(workflow_id: str) -> dict:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         provider_name = digest_provider.name if digest_provider else "无LLM"
-        await log_system("INFO", "digest", f"摘要生成完成: {digest_date.strftime('%Y-%m-%d')}, {len(events)}条, {provider_name}", result)
+        await create_log(session, "INFO", "digest", f"摘要生成完成: {digest_date.strftime('%Y-%m-%d')}, {len(events)}条, {provider_name}", result)
         return result
     finally:
         await session.close()

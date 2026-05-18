@@ -81,10 +81,24 @@ async def _send_webhook(url: str, message: str) -> bool:
     """Send a markdown message to a webhook URL using multiple payload formats."""
     headers = {"Content-Type": "application/json"}
 
-    # Try common webhook payload formats in parallel
     payloads = [
+        {
+            "msg_type": "interactive",
+            "card": {
+                "header": {"title": {"tag": "plain_text", "content": "🚨 工作流失败告警"}, "template": "red"},
+                "elements": [
+                    {"tag": "markdown", "content": message},
+                    {"tag": "hr"},
+                    {"tag": "action", "actions": [{
+                        "tag": "button",
+                        "text": {"tag": "plain_text", "content": "去修复"},
+                        "type": "primary",
+                        "url": "http://100.69.151.2:3000/",
+                    }]},
+                ],
+            },
+        },
         {"msg_type": "text", "content": {"text": message}},
-        {"msg_type": "interactive", "card": {"header": {"title": {"tag": "plain_text", "content": "🚨 工作流失败告警"}, "template": "red"}, "elements": [{"tag": "markdown", "content": message}]}},
         {"text": message},
         {"content": message},
     ]
